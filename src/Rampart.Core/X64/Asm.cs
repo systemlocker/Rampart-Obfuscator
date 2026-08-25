@@ -339,6 +339,33 @@ public sealed class Asm
         return this;
     }
 
+    /// <summary>Atomically sets one bit in a qword memory operand and leaves its
+    /// previous value in CF. The state record keeps these operands naturally
+    /// aligned, as required for cache-coherent cross-thread updates.</summary>
+    public Asm LockBtsMi(Reg dstBase, int disp, byte bit)
+    {
+        if (bit >= 64)
+            throw new ArgumentOutOfRangeException(nameof(bit), "A qword bit index must be below 64.");
+
+        _code.Add(0xF0); // LOCK
+        _code.Add(Rex(rm: dstBase));
+        _code.Add(0x0F);
+        _code.Add(0xBA);
+        EmitModRmDisp((Reg)5 /* /5 = BTS */, dstBase, disp);
+        _code.Add(bit);
+        return this;
+    }
+
+    /// <summary>Atomically XORs a qword register into a qword memory operand.</summary>
+    public Asm LockXorMr(Reg dstBase, Reg src, int disp = 0)
+    {
+        _code.Add(0xF0); // LOCK
+        _code.Add(Rex(r: src, rm: dstBase));
+        _code.Add(0x31);
+        EmitModRmDisp(src, dstBase, disp);
+        return this;
+    }
+
     public Asm AddRr(Reg dst, Reg src)
     {
         _code.Add(Rex(r: src, rm: dst));

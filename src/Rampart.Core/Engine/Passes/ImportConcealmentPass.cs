@@ -35,7 +35,7 @@ public sealed class ImportConcealmentPass
             return;
         }
 
-        uint slotsRva = ctx.Alloc(imports.Count * 8 + 8, 8);
+        uint slotsRva = ctx.AllocData(imports.Count * 8 + 8, 8);
 
         int rewrites = RewriteIatReferences(ctx, imports, slotsRva);
 
@@ -75,6 +75,9 @@ public sealed class ImportConcealmentPass
             $"concealed {imports.Count} imports behind slot array at {slotsRva:X8}; {rewrites} references rewritten" +
             (level >= Config.ProtectionLevel.Balanced ? "; name/descriptor data zeroed" : "") +
             (level >= Config.ProtectionLevel.Heavy ? "; import+IAT directories dropped" : "")));
+        ctx.MarkApplied("packaging.import-concealment", level);
+        if (ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
+            ctx.MarkApplied("code-transformation.mba-constants");
     }
 
     /// <summary>Finds every rip-relative instruction targeting the classic IAT

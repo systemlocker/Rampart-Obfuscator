@@ -28,7 +28,7 @@ public static class RelocBuilder
         var byPage = combined.GroupBy(r => r.Rva & ~0xFFFu).OrderBy(g => g.Key).ToList();
         int newSize = byPage.Sum(g => 8 + Align2(g.Count() * 2, 4));
 
-        uint newRva = ctx.Alloc(newSize, 8);
+        uint newRva = ctx.AllocData(newSize, 8);
         var blob = new byte[newSize];
         int pos = 0;
 
@@ -50,7 +50,7 @@ public static class RelocBuilder
             pos += blockSize;
         }
 
-        ctx.WriteStub(newRva, blob);
+        ctx.WriteData(newRva, blob);
         pe.SetDirectory(DataDir.Basereloc, newRva, (uint)pos);
         ctx.Log.Add(new("reloc", $"relocation table rebuilt: {existing.Count} original + {ctx.RelocSlots.Count} new slots ({combined.Count} unique)"));
     }
@@ -111,8 +111,8 @@ public static class GuardCfBuilder
         byte[] rebuilt = new byte[entries.Count * stride];
         for (int i = 0; i < entries.Count; i++)
             entries[i].CopyTo(rebuilt, i * stride);
-        uint newTableRva = ctx.Alloc(rebuilt.Length, 8);
-        ctx.WriteStub(newTableRva, rebuilt);
+        uint newTableRva = ctx.AllocData(rebuilt.Length, 8);
+        ctx.WriteData(newTableRva, rebuilt);
 
         pe.WriteRva(loadConfigRva + 0x80, BitConverter.GetBytes(pe.ImageBase + newTableRva));
         pe.WriteRva(loadConfigRva + 0x88, BitConverter.GetBytes((ulong)entries.Count));
@@ -170,15 +170,15 @@ public static class TlsBuilder
 
         // Callback array: [dispatcher, ...original, 0]. Each entry is an absolute
         // VA the loader relocates — every slot is registered for DIR64 fixups.
-        uint arrayRva = ctx.Alloc(8 * (existing.Count + 2), 8);
+        uint arrayRva = ctx.AllocData(8 * (existing.Count + 2), 8);
         ulong imageBase = pe.ImageBase;
         if (indexAddress == 0)
-            indexAddress = imageBase + ctx.Alloc(8, 8);
-        uint dirRva = ctx.Alloc(40, 8);
+            indexAddress = imageBase + ctx.AllocData(8, 8);
+        uint dirRva = ctx.AllocData(40, 8);
 
-        ctx.WriteStub(arrayRva, BitConverter.GetBytes(imageBase + dispatcherRva));
+        ctx.WriteData(arrayRva, BitConverter.GetBytes(imageBase + dispatcherRva));
         for (int i = 0; i < existing.Count; i++)
-            ctx.WriteStub(arrayRva + 8 + (uint)(i * 8), BitConverter.GetBytes(existing[i]));
+            ctx.WriteData(arrayRva + 8 + (uint)(i * 8), BitConverter.GetBytes(existing[i]));
         // terminating zero already zero.
 
         for (int i = 0; i < existing.Count + 1; i++)
@@ -191,7 +191,7 @@ public static class TlsBuilder
         BinaryPrimitives.WriteUInt64LittleEndian(dirBlob.AsSpan(24), imageBase + arrayRva);     // AddressOfCallBacks
         BinaryPrimitives.WriteUInt32LittleEndian(dirBlob.AsSpan(32), sizeOfZeroFill);
         BinaryPrimitives.WriteUInt32LittleEndian(dirBlob.AsSpan(36), characteristics);
-        ctx.WriteStub(dirRva, dirBlob);
+        ctx.WriteData(dirRva, dirBlob);
 
         // IMAGE_TLS_DIRECTORY64 stores absolute VAs, not RVAs. The loader may
         // rebase the image before it writes AddressOfIndex or walks callbacks,

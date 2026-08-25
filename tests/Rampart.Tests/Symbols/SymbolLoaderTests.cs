@@ -11,13 +11,13 @@ public class SymbolLoaderTests
     [Fact]
     public void ParsesMsvcMapPublicsIntoRvas()
     {
-        var pe = PeImage.Load(SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
+        var pe = PeImage.Load(TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
         const string map =
-            " 0001:0000000000000000 BirdRodeo::License::Validate 0000000140001000 f license.obj";
+            " 0001:0000000000000000 ExampleApp::License::Validate 0000000140001000 f license.obj";
 
         SymbolRecord symbol = Assert.Single(SymbolLoader.ParseMap(map, pe));
 
-        Assert.Equal("BirdRodeo::License::Validate", symbol.Name);
+        Assert.Equal("ExampleApp::License::Validate", symbol.Name);
         Assert.Equal(0x1000u, symbol.StartRva);
         Assert.Equal("license.obj", symbol.Module);
     }
@@ -25,15 +25,15 @@ public class SymbolLoaderTests
     [Fact]
     public void ParsesLlvmPdbPublicDumpUsingSectionOffsets()
     {
-        var pe = PeImage.Load(SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
-        const string dump = "addr = 0001:00000000, name = BirdRodeo::Gameplay::ScoreBull";
+        var pe = PeImage.Load(TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
+        const string dump = "addr = 0001:00000000, name = ExampleApp::Workflow::Score";
 
         SymbolRecord symbol = Assert.Single(
-            SymbolLoader.ParseLlvmPdbDump(dump, pe, "BirdRodeo.pdb"));
+            SymbolLoader.ParseLlvmPdbDump(dump, pe, "ExampleApp.pdb"));
 
-        Assert.Equal("BirdRodeo::Gameplay::ScoreBull", symbol.Name);
+        Assert.Equal("ExampleApp::Workflow::Score", symbol.Name);
         Assert.Equal(0x1000u, symbol.StartRva);
-        Assert.Equal("BirdRodeo.pdb", symbol.Source);
+        Assert.Equal("ExampleApp.pdb", symbol.Source);
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public class SymbolLoaderTests
     {
         const string json =
             """
-            [{"name":"BirdRodeo::Main","startRva":4096,"endRva":4128,"module":"game.obj","source":"main.cpp"}]
+            [{"name":"ExampleApp::Main","startRva":4096,"endRva":4128,"module":"app.obj","source":"main.cpp"}]
             """;
 
         SymbolRecord symbol = Assert.Single(SymbolLoader.ParseJson(json));

@@ -18,7 +18,11 @@ public sealed class CodeTransformPass
     {
         var junkLevel = ctx.MaximumFunctionLevel("code-transformation.junk-insertion");
         if (junkLevel != Config.ProtectionLevel.Off)
-            FillPaddingWithDecoys(ctx, junkLevel);
+        {
+            int changed = FillPaddingWithDecoys(ctx, junkLevel);
+            if (changed > 0)
+                ctx.MarkApplied("code-transformation.junk-insertion", junkLevel);
+        }
 
         if (ctx.MaximumFunctionLevel("code-transformation.per-build-mutation") != Config.ProtectionLevel.Off)
             ctx.Log.Add(new("mutation", $"build seed {ctx.Settings.Seed:X16} drives decoy streams, keys, and stub layout"));
@@ -31,7 +35,7 @@ public sealed class CodeTransformPass
     /// runs the linker leaves behind) and fills it with per-build decoy
     /// instruction streams: real decodable x64 that nothing executes. Padding
     /// AFTER a function, BEFORE the next function's first byte — never inside.</summary>
-    private static void FillPaddingWithDecoys(BuildContext ctx, Config.ProtectionLevel level)
+    private static int FillPaddingWithDecoys(BuildContext ctx, Config.ProtectionLevel level)
     {
         var pe = ctx.Pe;
         int density = level switch
@@ -95,6 +99,7 @@ public sealed class CodeTransformPass
         }
 
         ctx.Log.Add(new("junk", $"decoy streams filled {filled} padding gaps ({bytesFilled} bytes)"));
+        return bytesFilled;
     }
 
     /// <summary>Generates a valid, never-executed instruction stream into the

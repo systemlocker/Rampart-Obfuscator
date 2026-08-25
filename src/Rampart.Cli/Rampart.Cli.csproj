@@ -9,6 +9,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>Rampart.Cli</RootNamespace>
     <AssemblyName>rampart</AssemblyName>
+    <Description>Command-line interface for protecting and inspecting Windows x64 PE files with Rampart.</Description>
+    <PackageTags>cli;pe;obfuscation;protection;windows;x64</PackageTags>
     <RollForward>LatestMajor</RollForward>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>

@@ -10,7 +10,7 @@ public class PeHeaderGrowthTests
     [Fact]
     public void AddingManySectionsGrowsHeadersWithoutChangingOriginalData()
     {
-        var pe = PeImage.Load(SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 19)));
+        var pe = PeImage.Load(TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 19)));
         PeImage.Section text = pe.Sections.Single(section => section.Name == ".text");
         byte[] originalText = text.Data.ToArray();
         uint originalRawPointer = text.PointerToRawData;

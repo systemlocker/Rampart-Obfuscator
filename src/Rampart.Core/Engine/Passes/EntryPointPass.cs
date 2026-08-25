@@ -20,9 +20,12 @@ public sealed class EntryPointPass
         var a = new Asm();
         // The dispatcher is also the TLS callback target: it runs the init chain
         // before the entry point. A guard word makes re-entry per-thread a no-op.
+        uint guardRva = ctx.AllocData(8, 8);
         uint dispatcherRva = ctx.Alloc(EstimateDispatcherSize(ctx), 16);
         EmitDispatcher(ctx, a, dispatcherRva, originalEp);
         byte[] dispatcher = a.Assemble();
+        BuildContext.PatchRipReferences(dispatcher, a, dispatcherRva,
+            new Dictionary<string, uint> { ["guard"] = guardRva });
         ctx.WriteStub(dispatcherRva, dispatcher);
         ctx.RegisterInit(dispatcherRva, "init dispatcher (string decrypt + import resolve chain)");
 

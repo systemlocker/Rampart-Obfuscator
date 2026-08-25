@@ -68,6 +68,12 @@ public sealed class StringProtectionPass
         ctx.Log.Add(new("strings",
             $"encrypted {encrypted} strings in place with {decryptors} scoped decryptor(s)" +
             (traps > 0 ? $", {traps} INT3/INT2D sentinel sites" : "")));
+        ctx.MarkApplied("strings.encryption");
+        ctx.MarkApplied("strings.coverage");
+        if (traps > 0)
+            ctx.MarkApplied("strings.anti-instrumentation");
+        if (ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
+            ctx.MarkApplied("code-transformation.mba-constants");
     }
 
     private readonly record struct FoundString(

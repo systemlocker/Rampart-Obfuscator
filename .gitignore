@@ -3,9 +3,7 @@
 .vs/
 TestResults/
 artifacts/
-samples/
 
 *.user
 *.suo
 *.protected.exe
-rampart-sample.exe

@@ -11,8 +11,8 @@ public class DosStubTests
     [Fact]
     public void ImmediateScrubAllowsLaterDecoyDataToSurvive()
     {
-        var pe = PeImage.Load(SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
-        byte[] decoy = "bird.pdb\0"u8.ToArray();
+        var pe = PeImage.Load(TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
+        byte[] decoy = "example.pdb\0"u8.ToArray();
 
         pe.ScrubDosStubContent();
         pe.WriteDosStub(0x60, decoy);

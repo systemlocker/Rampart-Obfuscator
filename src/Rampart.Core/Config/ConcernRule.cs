@@ -69,11 +69,11 @@ public static class ConcernRules
             "The autoanalysis bomb emits tens of thousands of synthetic prologues. Some AV/EDR " +
             "engines count suspicious-looking density and may raise a score for the file."),
 
-        (s, c) => R(s, c, "response.tool-response", ProtectionLevel.Maximum,
-            ConcernSeverity.Risky, "RP10",
-            "Maximum tool-specific response includes corrupt-exports retaliation. Deliberately " +
-            "destructive to the analyzing process; some sandboxes report it as malicious behaviour.",
-            "Heavy keeps to crash/misdirect responses and is the safer ceiling for most software."),
+        (s, c) => R(s, c, "response.tool-response", ProtectionLevel.Light,
+            ConcernSeverity.Warning, "RP10",
+            "Tool response turns shared detection state into an application response. At Light the " +
+            "response is a clean process exit, so a false positive can end a legitimate session.",
+            "Exercise detection-only settings in QA before enabling the response in a release profile."),
     ];
 
     public static List<Concern> Evaluate(ProtectionSettings settings, KnobCatalog catalog)

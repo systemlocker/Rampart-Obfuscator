@@ -12,7 +12,7 @@ public class ImportTableTests
     [Fact]
     public void ImportNameMayEndAtRawSectionBoundary()
     {
-        var pe = PeImage.Load(SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 7)));
+        var pe = PeImage.Load(TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 7)));
         DataDirectory imports = pe.Directory(DataDir.Import);
         uint intRva = pe.ReadU32(imports.RelativeVirtualAddress);
         PeImage.Section rdata = pe.Sections.Single(section => section.Name == ".rdata");

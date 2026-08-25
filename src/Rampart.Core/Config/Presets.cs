@@ -40,8 +40,25 @@ public static class Presets
                 or "nuclear.injection-hunter" => ProtectionLevel.Off,
             // Self-debugging holds the debug port; too surprising for a default.
             "integrity.self-debug-port" => tier >= 4 ? ProtectionLevel.Light : ProtectionLevel.Off,
-            // Loader hijack poisons LdrLoadDll validators; can break DLL-heavy apps.
+            // Loader interposition can refuse legitimate plug-ins in DLL-heavy apps.
             "integrity.loader-hijack" => tier >= 4 ? ProtectionLevel.Light : ProtectionLevel.Off,
+            // Runtime environment probes and process-policy changes need an
+            // explicit compatibility decision. `--only` still enables their
+            // Light emitters together with required startup infrastructure.
+            "anti-debug.channel-sweep" or "anti-debug.inline-hook-check"
+                or "anti-debug.veh-tamper" or "anti-debug.dll-notify"
+                or "anti-sandbox.virtualisation-detect"
+                or "anti-sandbox.fingerprint-suite" or "anti-sandbox.human-gate"
+                or "analysis.runtime-header-corruption" or "memory.anti-dump"
+                or "integrity.header-scrub"
+                or "anti-inject.dacl-hardening" or "anti-inject.cet-shadow-stack"
+                or "anti-inject.dynamic-code-policy" or "anti-inject.iat-hash-check"
+                or "integrity.kernel-wall" or "integrity.measurement-channels"
+                or "integrity.tls-veh-ownership" or "integrity.mitigation-stack"
+                or "integrity.hidden-threads"
+                or "response.silent-taint" or "response.tool-response"
+                or "response.brand-overlay" or "response.custom-messages"
+                => ProtectionLevel.Off,
             _ => (ProtectionLevel)tier,
         };
         return clamp;

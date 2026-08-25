@@ -153,7 +153,7 @@ public static class KnobCatalogData
 
         // ---------------------------------------------------------------- anti-debug
         new("anti-debug.channel-sweep", KnobGroups.AntiDebug, "Debug channel sweep",
-            "Sweeps nine debugger detection channels on a configurable interval.",
+            "Cross-checks debugger-presence channels; higher levels add channels and cadence.",
             [1, 2, 3, 4],
             [
                 // Channel counts are contractual: Light=3, Balanced=6, Heavy=9; Maximum
@@ -166,10 +166,10 @@ public static class KnobCatalogData
             [ThreatTags.Debug]),
 
         new("anti-debug.inline-hook-check", KnobGroups.AntiDebug, "Inline hook check",
-            "Hashes prologue bytes of critical ntdll exports to catch inline hook patches.",
+            "Captures salted prologue fingerprints and checks common trampoline signatures on critical ntdll exports.",
             [1, 1, 2, 3],
             [
-                "Hashes the prologue bytes of the most-hooked ntdll exports and verifies them at startup.",
+                "Captures salted prologue fingerprints and checks common trampoline signatures on selected ntdll exports at startup.",
                 "Extends coverage to the full hot-export set and re-verifies periodically.",
                 "Adds full-function span checks so mid-function hook engines are caught too.",
                 "Continuous verification with per-build hash salts; any mismatch feeds the response layer.",
@@ -177,7 +177,7 @@ public static class KnobCatalogData
             [ThreatTags.Debug, ThreatTags.Tools]),
 
         new("anti-debug.veh-tamper", KnobGroups.AntiDebug, "VEH tamper check",
-            "Walks and verifies the vectored exception handler chain for tampering.",
+            "Registers and verifies a protector-owned VEH; higher levels add chain checks.",
             [1, 1, 2, 2],
             [
                 "Installs a VEH and verifies at startup that its own entry still sits in the chain.",
@@ -188,7 +188,7 @@ public static class KnobCatalogData
             [ThreatTags.Debug]),
 
         new("anti-debug.dll-notify", KnobGroups.AntiDebug, "Load notifications",
-            "Registers an LDR notification callback to observe every module load, including manual maps.",
+            "Registers an LDR notification callback to observe loader-mediated module changes.",
             [1, 1, 2, 2],
             [
                 "Registers an LDR notification callback so every DLL load into the process is observed.",
@@ -203,15 +203,15 @@ public static class KnobCatalogData
             "Applies a DACL denying PROCESS_VM_WRITE and PROCESS_CREATE_THREAD to non-SYSTEM SIDs.",
             [1, 1, 2, 2],
             [
-                "Applies a DACL denying PROCESS_VM_WRITE to non-SYSTEM SIDs.",
-                "Also denies PROCESS_CREATE_THREAD and asserts the ACL on both process and thread handles.",
+                "Applies a process DACL denying PROCESS_VM_WRITE and PROCESS_CREATE_THREAD to non-SYSTEM SIDs.",
+                "Also asserts a matching ACL on protector-owned worker thread handles.",
                 "Also restricts PROCESS_VM_READ for non-owners, closing dumper handles as a side effect.",
                 "Re-asserts the DACL periodically so handle-duplication races cannot stick.",
             ],
             [ThreatTags.Inject]),
 
         new("anti-inject.cet-shadow-stack", KnobGroups.AntiInject, "CET shadow stack",
-            "Enables and verifies CET shadow stack; ROP attempts fault into the VEH layer.",
+            "Marks compatible images for Windows CET enforcement; higher levels add runtime verification.",
             [1, 1, 3, 4],
             [
                 "Enables CET shadow stack where the OS and CPU support it; unsupported systems run unchanged.",
@@ -233,10 +233,10 @@ public static class KnobCatalogData
             [ThreatTags.Inject]),
 
         new("anti-inject.iat-hash-check", KnobGroups.AntiInject, "Import hash check",
-            "Re-verifies hot ntdll import targets by hash at call time; trampolines trip the check.",
+            "Baselines resolved import targets and detects later IAT replacement.",
             [1, 1, 2, 3],
             [
-                "Hashes the hot ntdll import targets at load and verifies them before first use.",
+                "Baselines resolved IAT targets during protected startup and rechecks them from the TLS monitor.",
                 "Re-verifies at call time through the concealed import layer, so trampolines outside .text trip it.",
                 "Covers the full import set and verifies whole function spans, not just prologues.",
                 "Per-build hash salts plus cross-verification against pristine copies held in protector data.",
@@ -245,7 +245,7 @@ public static class KnobCatalogData
 
         // ------------------------------------------------------------- anti-sandbox
         new("anti-sandbox.virtualisation-detect", KnobGroups.AntiSandbox, "Virtualisation detect",
-            "Detects hypervisors via CPUID, timing signatures, and VM artifacts.",
+            "Reads virtualization signals; higher levels add timing signatures and VM artifacts.",
             [1, 1, 2, 2],
             [
                 "Reads the CPUID hypervisor bit and cross-checks the reported vendor string.",
@@ -256,10 +256,10 @@ public static class KnobCatalogData
             [ThreatTags.Sandbox]),
 
         new("anti-sandbox.fingerprint-suite", KnobGroups.AntiSandbox, "Sandbox fingerprints",
-            "Fingerprints known analysis services and sandbox families; each level adds families.",
+            "Checks configurable runtime artifacts associated with automated analysis environments.",
             [1, 1, 2, 3],
             [
-                "Matches artifacts of the common open-source sandbox family (default paths, drivers, hostnames).",
+                "Checks exact loaded-module names and environment-variable artifacts from common analysis environments.",
                 "Adds fingerprints for interactive browser-run analysis services (agents, environment quirks).",
                 "Adds hardware-assisted and enterprise analysis platforms (hypervisor hooks, instrumentation drivers).",
                 "Adds heuristics for unnamed sandboxes: environment inconsistency and execution-speed scoring on top of all families.",
@@ -267,10 +267,10 @@ public static class KnobCatalogData
             [ThreatTags.Sandbox, ThreatTags.Tools]),
 
         new("anti-sandbox.human-gate", KnobGroups.AntiSandbox, "Human activity gate",
-            "Requires recent human input activity and detects fast-forwarded sleep timelines.",
+            "Observes recent human input; higher levels add timeline and plausibility checks.",
             [1, 1, 2, 2],
             [
-                "Sensitive paths require a recent input event (keyboard/mouse) within a generous window.",
+                "Records whether the system has seen keyboard or mouse input within a generous 30-minute startup window.",
                 "Tightens the window and adds fast-forward detection: skipped sleeps inconsistent with the wall clock.",
                 "Adds input plausibility checks (event spacing, device presence) against synthetic input injection.",
                 "Continuous gating: sensitive operations re-check activity and verdicts feed the response layer.",
@@ -290,10 +290,10 @@ public static class KnobCatalogData
             [ThreatTags.Static, ThreatTags.Tools]),
 
         new("analysis.hexrays-denial", KnobGroups.AnalysisCrashers, "Decompiler denial",
-            "Injects decompiler-hostile constructs that break deoptimization passes.",
+            "Adds valid decompiler-hostile control and data structures that raise recovery cost.",
             [1, 1, 3, 4],
             [
-                "Injects constructs known to decompile poorly (pointer aliasing games, jump-table lookalikes) into cold code.",
+                "Injects constructs known to decompile poorly (pointer aliasing tricks, jump-table lookalikes) into cold code.",
                 "Adds pattern dead ends: expressions that collapse wrongly under common simplifier rules.",
                 "Adds microcode-hostile sandwiches: constructs that break decompiler passes when analyzed in sequence.",
                 "Denial constructs spread through real and decoy code alike; every function decompiles to noise.",
@@ -301,7 +301,7 @@ public static class KnobCatalogData
             [ThreatTags.Static, ThreatTags.Tools]),
 
         new("analysis.symbolic-denial", KnobGroups.AnalysisCrashers, "Symbolic denial",
-            "Plants concolic time-bombs and constraint-pathology gadgets in decoy bodies.",
+            "Plants bounded nonlinear constraint gadgets in cold decoy bodies.",
             [1, 1, 3, 4],
             [
                 "Plants concolic time-bombs in decoy bodies: paths whose solver time explodes when reached.",
@@ -312,7 +312,7 @@ public static class KnobCatalogData
             [ThreatTags.Static, ThreatTags.Tools]),
 
         new("analysis.static-decode-denial", KnobGroups.AnalysisCrashers, "Static decode denial",
-            "Overlaps instructions and encrypts the code section on disk (AES-128-CTR at Heavy).",
+            "Adds overlapping cold-code decodes; higher levels plan broader coverage and at-rest encryption.",
             [1, 2, 4, 6],
             [
                 "Overlaps instructions in cold regions so linear and recursive disassembly disagree.",
@@ -335,7 +335,7 @@ public static class KnobCatalogData
 
         // -------------------------------------------------------- memory-protection
         new("memory.anti-dump", KnobGroups.MemoryProtection, "Anti-dump",
-            "Corrupts in-memory section headers and traps VirtualQuery to break dump reconstruction.",
+            "Corrupts mapped section reconstruction metadata; higher levels add region-map defenses.",
             [2, 2, 4, 5],
             [
                 "Corrupts in-memory section headers so reconstruction tools rebuild a broken image.",
@@ -504,11 +504,11 @@ public static class KnobCatalogData
             [ThreatTags.Kernel, ThreatTags.Dump]),
 
         new("integrity.measurement-channels", KnobGroups.IntegrityBinding, "Measurement channels",
-            "Folds PE, sentinel, per-function, and live code-hash measurements into the runtime key.",
+            "Measures generated code at runtime; higher levels add independent integrity channels.",
             [1, 1, 2, 4],
             [
                 // Channel counts are contractual: one channel per level, Light=1 .. Maximum=4.
-                "Folds one channel into the runtime key: the PE fingerprint.",
+                "Measures relocation-stable generated function ranges with a build-salted code hash.",
                 "Adds a second channel: sentinel probe status joins the key derivation.",
                 "Adds a third channel: per-function tags verified before each protected function runs.",
                 "Adds the fourth channel: a live code-hash chain over executing code, checked continuously.",
@@ -528,7 +528,7 @@ public static class KnobCatalogData
             [ThreatTags.Debug, ThreatTags.Dump]),
 
         new("integrity.tls-veh-ownership", KnobGroups.IntegrityBinding, "TLS/VEH ownership",
-            "Chains sentinels across TLS callbacks and the VEH chain with cross-verification.",
+            "Verifies Rampart's TLS ownership; higher levels add TLS/VEH cross-verification.",
             [1, 1, 2, 3],
             [
                 "Sentinels chain across TLS callbacks; removal of our callback marks the session.",
@@ -539,7 +539,7 @@ public static class KnobCatalogData
             [ThreatTags.Debug, ThreatTags.Tools]),
 
         new("integrity.header-scrub", KnobGroups.IntegrityBinding, "Runtime header scrub",
-            "Zeroes section table, NumberOfSections, MZ magic, and e_lfanew in memory.",
+            "Scrubs mapped loader metadata in stages, beginning with the section table.",
             [1, 1, 2, 2],
             [
                 "Zeroes the in-memory section table after loader initialization.",
@@ -553,7 +553,7 @@ public static class KnobCatalogData
             "Runs worker threads under the hide-from-debugger flag.",
             [1, 1, 2, 2],
             [
-                "Worker threads set the hide-from-debugger flag so debuggers never list them.",
+                "A monitor worker sets ThreadHideFromDebugger and records the PEB debugger signal without changing host behavior.",
                 "Adds more hidden workers for the sweep and measurement loops.",
                 "Hidden threads verify each other's state; a listed or dead worker marks the session.",
                 "All protector threads hidden, cross-verified, and respawned on tamper.",
@@ -565,17 +565,17 @@ public static class KnobCatalogData
             [1, 2, 3, 4],
             [
                 "Interposes on the loader's DLL-entry validation path for the protected modules.",
-                "Poisons the validator state so foreign inject paths get refused outright.",
+                "Adds an explicit loader policy so foreign injection paths are refused outright.",
                 "Covers the LdrLoadDll and init-routine paths with per-build interposition.",
                 "Full interposition re-asserted periodically; interposition that vanishes is re-installed.",
             ],
             [ThreatTags.Inject]),
 
         new("integrity.mitigation-stack", KnobGroups.IntegrityBinding, "Mitigation stack",
-            "Wires ASLR, DEP, CFG, CET, image-load, and dynamic-code mitigation policies.",
+            "Asserts compatible image mitigations; higher levels coordinate broader runtime policies.",
             [1, 1, 2, 3],
             [
-                "Wires ASLR, DEP, and CFG mitigations for the process and its threads.",
+                "Asserts ASLR, high-entropy-VA, and DEP image flags while preserving existing CFG metadata.",
                 "Adds CET (where available) and image-load policies.",
                 "Adds dynamic-code policy coupling and strict handle rules.",
                 "The full stack — ASLR/DEP/CFG/CET/image-load/dynamic-code — is asserted and re-verified.",
@@ -587,7 +587,7 @@ public static class KnobCatalogData
             "Taints the session key on detection so execution diverges with no branch to NOP.",
             [1, 1, 2, 3],
             [
-                "On first detection, taints the session key so later results quietly diverge.",
+                "On first detection, idempotently taints Rampart's shared session-key state.",
                 "Adds delayed, varied divergence points so the cause is not localizable.",
                 "Multiple taint stages interact; every detection shifts all downstream behavior.",
                 "Full divergence engineering: no branch to NOP and no single patch restores correct behavior.",
@@ -619,13 +619,13 @@ public static class KnobCatalogData
             [ThreatTags.Static, ThreatTags.Tools]),
 
         new("response.tool-response", KnobGroups.Response, "Tool response",
-            "Fires a configured response (exit/crash/misdirect) when analysis tools are detected.",
+            "Applies a safe response to shared detection state; higher levels add response choices.",
             [1, 1, 3, 4],
             [
-                "On detecting named analysis tools (debuggers, memory editors, sandboxes), fires the configured response — default: clean exit.",
-                "Adds crash and misdirect responses, chosen per tool class.",
-                "Adds per-tool responses with multi-stage misdirection before termination.",
-                "Adds corrupt-exports retaliation: the detected tool's own process is fed poisoned data.",
+                "On shared debugger, sandbox, injection, or integrity detection state, performs a clean exit.",
+                "Adds feature-denial and session-invalidation responses, chosen per detection class.",
+                "Adds per-class clean-exit, feature-denial, and delayed session-invalidation policies.",
+                "Adds a full in-process policy matrix with auditable, non-destructive responses for every detection class.",
             ],
             [ThreatTags.Tools, ThreatTags.Sandbox]),
 
@@ -641,13 +641,13 @@ public static class KnobCatalogData
             [ThreatTags.Dump, ThreatTags.Tools]),
 
         new("nuclear.injection-hunter", KnobGroups.Response, "Injection hunter",
-            "Monitors for foreign loads, poisons manual maps, and blocks APC injection.",
+            "Monitors foreign loads; higher levels plan manual-map and APC countermeasures.",
             [1, 2, 4, 5],
             [
                 "Monitors for foreign module loads into the process and flags them.",
-                "Adds manual-map countermeasures: section poison makes map-and-run fail loudly.",
-                "Adds APC injection blocking: user APCs queued from foreign sources are refused.",
-                "Full hunter: monitor, poison, and blocker cooperate and feed the response layer.",
+                "Adds manual-map detection for executable image regions that never produced a loader event.",
+                "Adds APC injection detection for callbacks queued from foreign executable regions.",
+                "Full hunter correlates loader, executable-region, and APC observations through the response layer.",
             ],
             [ThreatTags.Inject]),
 

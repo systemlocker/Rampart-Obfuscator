@@ -25,8 +25,8 @@ public class ProtectionSettingsJsonTests
     {
         const string json = """
             {
-              "Input": "BirdRodeo.exe",
-              "Output": "BirdRodeo.protected.exe",
+              "Input": "ExampleApp.exe",
+              "Output": "ExampleApp.protected.exe",
               "Settings": {
                 "Knobs": { "packaging.symbol-scrub": "Heavy" },
                 "Preset": "balanced",
@@ -59,13 +59,13 @@ public class ProtectionSettingsJsonTests
     public void RegionRulesAndSymbolInputsRoundTrip()
     {
         var settings = ProtectionSettings.FromPreset(Presets.Balanced);
-        settings.SymbolSources.Add("BirdRodeo.map");
-        settings.IncludeSymbols.Add("BirdRodeo::*");
-        settings.ExcludeSymbols.Add("BirdRodeo::Render::*");
+        settings.SymbolSources.Add("ExampleApp.map");
+        settings.IncludeSymbols.Add("ExampleApp::*");
+        settings.ExcludeSymbols.Add("ExampleApp::Render::*");
         settings.IncludeRvaRanges.Add(new RvaRange { Start = 0x1000, End = 0x2000 });
         settings.Rules.Add(new ProtectionRule
         {
-            Match = "BirdRodeo::License::*",
+            Match = "ExampleApp::License::*",
             Scope = ProtectionRuleScope.Symbol,
             Preset = Presets.Maximum,
             Knobs = { ["strings.coverage"] = ProtectionLevel.Heavy },
@@ -74,7 +74,7 @@ public class ProtectionSettingsJsonTests
         ProtectionSettings actual = ProtectionSettingsJson.Deserialize(
             ProtectionSettingsJson.Serialize(settings));
 
-        Assert.Equal("BirdRodeo.map", Assert.Single(actual.SymbolSources));
+        Assert.Equal("ExampleApp.map", Assert.Single(actual.SymbolSources));
         Assert.Equal(0x1000u, Assert.Single(actual.IncludeRvaRanges).Start);
         ProtectionRule rule = Assert.Single(actual.Rules);
         Assert.Equal(ProtectionRuleScope.Symbol, rule.Scope);

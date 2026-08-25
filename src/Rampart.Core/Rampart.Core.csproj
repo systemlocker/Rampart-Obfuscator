@@ -8,6 +8,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>Rampart</RootNamespace>
     <AssemblyName>Rampart.Core</AssemblyName>
+    <Description>Core PE transformation and inspection library for Rampart.</Description>
+    <PackageTags>pe;obfuscation;protection;windows;x64</PackageTags>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

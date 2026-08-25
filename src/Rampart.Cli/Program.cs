@@ -19,7 +19,6 @@ internal static class Program
                 "check" => CheckCommand.Run(args[1..]),
                 "knobs" => KnobsCommand.Run(args[1..]),
                 "explain" => ExplainCommand.Run(args[1..]),
-                "sample" => SampleCommand.Run(args[1..]),
                 "version" or "--version" => VersionCommand(),
                 "help" or "--help" or "-h" => HelpCommand(),
                 _ => UnknownCommand(args[0]),
@@ -34,7 +33,8 @@ internal static class Program
 
     private static int VersionCommand()
     {
-        Console.WriteLine("rampart 0.1.0");
+        Version? version = typeof(Program).Assembly.GetName().Version;
+        Console.WriteLine($"rampart {version?.ToString(3) ?? "unknown"}");
         return 0;
     }
 
@@ -64,7 +64,6 @@ internal static class Program
               check            validate a configuration and show concerns
               knobs            list ready and planned protection knobs
               explain <id>     show the level-by-level behavior of one knob
-              sample           generate a native demo binary
               version          print the version
 
             run `rampart <command> --help` for command-specific options.

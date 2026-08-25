@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>System Locker</Authors>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>CC0-1.0</PackageLicenseExpression>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/systemlocker/Rampart-Obfuscator</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

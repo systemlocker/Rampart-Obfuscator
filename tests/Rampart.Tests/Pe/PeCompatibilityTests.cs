@@ -9,16 +9,16 @@ namespace Rampart.Tests.Pe;
 public class PeCompatibilityTests
 {
     [Fact]
-    public void NativeSampleIsCompatible()
+    public void NativeFixtureIsCompatible()
     {
-        var pe = PeImage.Load(BuildSample());
+        var pe = PeImage.Load(BuildFixture());
         PeCompatibility.Validate(pe);
     }
 
     [Fact]
     public void ManagedImageIsRejected()
     {
-        var pe = PeImage.Load(BuildSample());
+        var pe = PeImage.Load(BuildFixture());
         pe.SetDirectory(DataDir.ComDescriptor, pe.EntryPointRva, 16);
 
         Assert.Throws<NotSupportedException>(() => PeCompatibility.Validate(pe));
@@ -27,7 +27,7 @@ public class PeCompatibilityTests
     [Fact]
     public void DllImageIsRejected()
     {
-        var pe = PeImage.Load(BuildSample());
+        var pe = PeImage.Load(BuildFixture());
         pe.Characteristics |= 0x2000;
 
         Assert.Throws<NotSupportedException>(() => PeCompatibility.Validate(pe));
@@ -36,7 +36,7 @@ public class PeCompatibilityTests
     [Fact]
     public void AlreadyProtectedImageIsRejected()
     {
-        var pe = PeImage.Load(BuildSample());
+        var pe = PeImage.Load(BuildFixture());
         pe.AddSection(".rmpt", 512, SectionCharacteristics.CntCode | SectionCharacteristics.MemExecute);
 
         Assert.Throws<InvalidOperationException>(() => PeCompatibility.Validate(pe));
@@ -45,7 +45,7 @@ public class PeCompatibilityTests
     [Fact]
     public void LowAlignmentImageUsesDeclaredSectionAlignment()
     {
-        var pe = PeImage.Load(BuildSample());
+        var pe = PeImage.Load(BuildFixture());
         pe.FileAlignment = 0x200;
         pe.SectionAlignment = 0x200;
 
@@ -62,13 +62,13 @@ public class PeCompatibilityTests
     [Fact]
     public void InvalidLowAlignmentCombinationIsRejected()
     {
-        var pe = PeImage.Load(BuildSample());
+        var pe = PeImage.Load(BuildFixture());
         pe.FileAlignment = 0x200;
         pe.SectionAlignment = 0x400;
 
         Assert.Throws<BadImageFormatException>(() => PeCompatibility.Inspect(pe));
     }
 
-    private static byte[] BuildSample() =>
-        SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
+    private static byte[] BuildFixture() =>
+        TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
 }

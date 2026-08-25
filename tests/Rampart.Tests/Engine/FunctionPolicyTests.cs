@@ -11,8 +11,8 @@ public class FunctionPolicyTests
         0x1000,
         0x1100,
         0x3000,
-        "BirdRodeo::License::Validate",
-        "BirdRodeo::License",
+        "ExampleApp::License::Validate",
+        "ExampleApp::License",
         "license.obj",
         ".text",
         "src/license.cpp");
@@ -21,11 +21,11 @@ public class FunctionPolicyTests
     public void IncludeExcludeAndProfilesResolveRealEmitterCeilings()
     {
         var settings = ProtectionSettings.FromPreset(Presets.Light);
-        settings.IncludeSymbols.Add("BirdRodeo::*");
+        settings.IncludeSymbols.Add("ExampleApp::*");
         settings.ExcludeSymbols.Add("*::Render::*");
         settings.Rules.Add(new ProtectionRule
         {
-            Match = "BirdRodeo::License::*",
+            Match = "ExampleApp::License::*",
             Preset = Presets.Maximum,
         });
         var policy = new FunctionPolicy(settings, Catalog);

@@ -14,7 +14,7 @@ public class PeMetadataCompatibilityTests
     [Fact]
     public void DelayBoundLoadConfigCfgAndCetMetadataSurviveProtection()
     {
-        var inputPe = PeImage.Load(SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
+        var inputPe = PeImage.Load(TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40)));
         PeImage.Section metadata = inputPe.AddSection(
             ".compat",
             0x400,

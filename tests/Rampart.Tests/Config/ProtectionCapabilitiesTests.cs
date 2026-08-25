@@ -8,6 +8,50 @@ public class ProtectionCapabilitiesTests
 {
     private static readonly KnobCatalog Catalog = KnobCatalog.Load();
 
+    // These ten settings predate the protection-coverage milestone. Keeping the
+    // baseline explicit makes the 50% target measurable as the catalog grows.
+    private static readonly HashSet<string> MilestoneBaseline = new(StringComparer.Ordinal)
+    {
+        "packaging.symbol-scrub",
+        "packaging.import-concealment",
+        "packaging.header-disguise",
+        "packaging.ep-confusion",
+        "code-transformation.junk-insertion",
+        "code-transformation.mba-constants",
+        "code-transformation.per-build-mutation",
+        "strings.encryption",
+        "strings.anti-instrumentation",
+        "strings.coverage",
+    };
+
+    [Fact]
+    public void ProtectionMilestoneKeepsAtLeastHalfOfRoadmapReady()
+    {
+        string[] newlyReady = Catalog.All
+            .Where(knob => ProtectionCapabilities.IsReady(knob.Id))
+            .Select(knob => knob.Id)
+            .Where(id => !MilestoneBaseline.Contains(id))
+            .ToArray();
+
+        int roadmapCount = Catalog.All.Count - MilestoneBaseline.Count;
+        Assert.True(newlyReady.Length * 2 >= roadmapCount,
+            $"Expected at least half of {roadmapCount} roadmap settings ready; found {newlyReady.Length}.");
+
+        foreach (string required in new[]
+        {
+            "analysis.ida-bomb",
+            "analysis.hexrays-denial",
+            "anti-debug.channel-sweep",
+            "anti-debug.inline-hook-check",
+            "anti-debug.veh-tamper",
+            "anti-debug.dll-notify",
+        })
+        {
+            Assert.True(ProtectionCapabilities.MaxReadyLevel(required) >= ProtectionLevel.Light,
+                $"Required milestone protection '{required}' is not ready at Light.");
+        }
+    }
+
     [Fact]
     public void PresetsOnlyEnableReadyEmitters()
     {

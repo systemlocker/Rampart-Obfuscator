@@ -47,6 +47,16 @@ public sealed class Protector
         var ctx = new BuildContext(pe, settings, catalog, symbols);
         ctx.Analyze();
 
+        void RunAndRecord(Action action, params string[] knobs)
+        {
+            byte[] before = pe.ToBytes();
+            action();
+            if (before.AsSpan().SequenceEqual(pe.ToBytes()))
+                return;
+            foreach (string knob in knobs)
+                ctx.MarkApplied(knob);
+        }
+
         var certificateDirectory = pe.Directory(DataDir.Security);
         if (!certificateDirectory.IsEmpty)
         {
@@ -59,32 +69,51 @@ public sealed class Protector
         }
 
         // --- passes, in order ---------------------------------------------------
-        new VirtualizationPass().Run(ctx);        // lift before any code rewriting
+        RunAndRecord(() => new VirtualizationPass().Run(ctx), "virtualization.per-build-isa");
         new CodeTransformPass().Run(ctx);         // junk / MBA / flattening / nanomites
+        RunAndRecord(() => new IdaBombPass().Run(ctx), "analysis.ida-bomb");
+        RunAndRecord(() => new HexRaysDenialPass().Run(ctx), "analysis.hexrays-denial");
+        RunAndRecord(() => new SymbolicDenialPass().Run(ctx), "analysis.symbolic-denial");
+        RunAndRecord(() => new StaticDecodeDenialPass().Run(ctx), "analysis.static-decode-denial");
         new StringProtectionPass().Run(ctx);      // encrypt strings, register decryptor init
+        RunAndRecord(() => new ApiConcealmentPass().Run(ctx), "memory.api-concealment");
         new ImportConcealmentPass().Run(ctx);     // hash-resolved IAT, register resolver init
-        new GuardStubsPass().Run(ctx);            // anti-debug/anti-inject/sandbox, mitigations
-        new SymbolScrubPass().Run(ctx);
-        new HeaderDisguisePass().Run(ctx);             // disguise after scrub so decoys survive
-        new EntryPointPass().Run(ctx);            // dispatcher + gem + TLS wiring
+        RunAndRecord(() => new AntiDebugPass().Run(ctx),
+            "anti-debug.channel-sweep", "anti-debug.inline-hook-check",
+            "anti-debug.veh-tamper", "anti-debug.dll-notify");
+        RunAndRecord(() => new AntiSandboxPass().Run(ctx),
+            "anti-sandbox.virtualisation-detect", "anti-sandbox.fingerprint-suite",
+            "anti-sandbox.human-gate");
+        RunAndRecord(() => new InjectionHunterPass().Run(ctx), "nuclear.injection-hunter");
+        RunAndRecord(() => new HiddenThreadsPass().Run(ctx), "integrity.hidden-threads");
+        RunAndRecord(() => new SymbolScrubPass().Run(ctx), "packaging.symbol-scrub");
+        RunAndRecord(() => new HeaderDisguisePass().Run(ctx), "packaging.header-disguise");
+        var runtimeHardening = new RuntimeHardeningPass();
+        RunAndRecord(() => runtimeHardening.RunBeforeEntryPoint(ctx),
+            "anti-inject.dacl-hardening", "anti-inject.cet-shadow-stack",
+            "anti-inject.dynamic-code-policy", "anti-inject.iat-hash-check",
+            "integrity.kernel-wall", "integrity.measurement-channels",
+            "integrity.tls-veh-ownership", "integrity.mitigation-stack",
+            "response.silent-taint", "response.tool-response",
+            "response.brand-overlay", "response.custom-messages");
+        RunAndRecord(() => new RuntimeHeaderProtectionPass().Run(ctx),
+            "analysis.runtime-header-corruption", "memory.anti-dump", "integrity.header-scrub");
+        RunAndRecord(() => new EntryPointPass().Run(ctx), "packaging.ep-confusion");
+        runtimeHardening.RunAfterEntryPoint(ctx);      // outer TLS monitor after dispatcher exists
 
         RelocBuilder.Rebuild(ctx);
 
         byte[] output = pe.ToBytes();
         string inputSha256 = Convert.ToHexString(SHA256.HashData(input));
         string outputSha256 = Convert.ToHexString(SHA256.HashData(output));
-        int budget = KnobCatalog.BudgetFor(settings, catalog);
+        if (!input.AsSpan().SequenceEqual(output)
+            && ctx.MaximumFunctionLevel("code-transformation.per-build-mutation") != ProtectionLevel.Off)
+            ctx.MarkApplied("code-transformation.per-build-mutation");
 
-        var applied = catalog.All
-            .Select(knob => new
-            {
-                Knob = knob,
-                Level = ProtectionCapabilities.FunctionScopedKnobs.Contains(knob.Id)
-                    ? ctx.MaximumFunctionLevel(knob.Id)
-                    : settings.LevelOf(knob),
-            })
-            .Where(item => item.Level != ProtectionLevel.Off)
-            .ToDictionary(item => item.Knob.Id, item => item.Level);
+        var applied = ctx.Applied
+            .OrderBy(item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        int budget = applied.Sum(item => catalog.Get(item.Key).PointsAt(item.Value));
 
         ctx.Log.Add(new("done",
             $"{input.Length} → {output.Length} bytes, {applied.Count} knobs active, budget {budget}"));

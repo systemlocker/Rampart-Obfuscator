@@ -55,4 +55,28 @@ public class AsmTests
         // extended registers; POP's encoding width must not affect the value.
         Assert.Equal((int)blobRva + 5, subtract);
     }
+
+    [Fact]
+    public void AtomicStateInstructionsEncodeLockAndExtendedBaseRegisters()
+    {
+        var assembler = new Asm();
+
+        assembler.LockBtsMi(Reg.R15, 24, 6);
+        assembler.LockXorMr(Reg.R15, Reg.Rcx, 32);
+
+        Assert.Equal(new byte[]
+        {
+            0xF0, 0x49, 0x0F, 0xBA, 0x6F, 0x18, 0x06, // lock bts qword [r15+24], 6
+            0xF0, 0x49, 0x31, 0x4F, 0x20,             // lock xor qword [r15+32], rcx
+        }, assembler.Assemble());
+    }
+
+    [Fact]
+    public void AtomicBitSetRejectsIndexesOutsideItsQword()
+    {
+        var assembler = new Asm();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            assembler.LockBtsMi(Reg.Rax, 0, 64));
+    }
 }

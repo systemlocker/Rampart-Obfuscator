@@ -10,7 +10,7 @@ namespace Rampart.Testing;
 /// is the only honest proof that a transform preserved semantics. Strings land in
 /// a read-only .rdata section exactly like real compiler output, so code reaches
 /// them with cross-section RIP-relative accesses the engine must handle.</summary>
-public sealed class SamplePeBuilder
+public sealed class TestPeBuilder
 {
     /// <summary>Context handed to the emitter: the code under construction plus
     /// named data blobs (strings) that land in .rdata.</summary>
@@ -38,7 +38,7 @@ public sealed class SamplePeBuilder
         // and call through the IAT slot, RIP-relative. At process entry RSP is
         // 8 mod 16; the push realigns so the callee sees the ABI-required
         // 8 mod 16 after our call pushes the return address.
-        ctx.Code.Label("sample_done");
+        ctx.Code.Label("fixture_done");
         ctx.Code.MovRr(Reg.Rcx, Reg.Rax);
         ctx.Code.PushR(Reg.Rax);
         ctx.Code.CallRip("iat_exit");

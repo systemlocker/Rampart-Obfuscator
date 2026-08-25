@@ -1,7 +1,7 @@
 # Rampart
 
-Rampart is an experimental, open-source Windows PE protector aimed at games and
-small native applications. It reshapes x64 executables with reproducible,
+Rampart is an experimental, open-source Windows PE protector for small native
+applications. It reshapes x64 executables with reproducible,
 per-build transforms while keeping the build configuration and resulting changes
 inspectable.
 
@@ -16,6 +16,14 @@ ready or planned, and the engine rejects a requested level that does not yet hav
 a working emitter. Presets are automatically clamped to the highest verified
 level for each ready protection.
 
+Rampart currently reports 39 of 58 catalog settings ready. The latest milestone
+completed 29 of the 48 settings that were previously roadmap-only, including all
+four anti-debug settings plus bounded IDA autoanalysis and Hex-Rays decompilation
+resistance.
+
+See [Protection coverage](FEATURES.md) for the asset-by-asset feature matrix,
+the complete ready/roadmap catalog, and candidate additions for native binaries.
+
 | Protection | Verified through |
 | --- | --- |
 | Symbol scrub | Heavy |
@@ -28,6 +36,15 @@ level for each ready protection.
 | Layered string encryption | Balanced |
 | String anti-instrumentation sentinels | Light |
 | String coverage tuning | Maximum |
+| IDA, Hex-Rays, symbolic, and static-decode resistance | Light |
+| Runtime PE-signature, anti-dump, and section-table scrubbing | Light |
+| Multi-channel anti-debug monitoring | Light |
+| Virtualization, sandbox-artifact, and human-activity observations | Light |
+| DACL, CET, dynamic-code, and IAT hardening | Light |
+| Sensitive API wrapper concealment | Light |
+| Runtime sentinels, code measurements, TLS ownership, and mitigation flags | Light |
+| Hidden integrity-monitor thread and foreign-module observation | Light |
+| Silent taint, clean exit, watermark, and diagnostic responses | Light |
 
 The build pipeline currently targets PE32+ AMD64 images. Its native integration
 test generates a small Windows executable, protects it with the Balanced preset,
@@ -51,26 +68,20 @@ verification runs only on Windows.
 
 ## Quick start
 
-Generate the self-contained test executable:
-
-```powershell
-dotnet run --project src/Rampart.Cli -- sample --out game-sample.exe
-```
-
 Preview the exact resolved configuration without writing output:
 
 ```powershell
-dotnet run --project src/Rampart.Cli -- protect game-sample.exe `
+dotnet run --project src/Rampart.Cli -- protect path\to\app.exe `
   --preset balanced --seed 12345 --dry-run --json
 ```
 
 Protect and inspect it:
 
 ```powershell
-dotnet run --project src/Rampart.Cli -- protect game-sample.exe `
-  --preset balanced --seed 12345 --out game-sample.protected.exe
+dotnet run --project src/Rampart.Cli -- protect path\to\app.exe `
+  --preset balanced --seed 12345 --out app.protected.exe
 
-dotnet run --project src/Rampart.Cli -- inspect game-sample.protected.exe
+dotnet run --project src/Rampart.Cli -- inspect app.protected.exe
 ```
 
 Use `--force` to replace an existing output file. Rampart always refuses to use
@@ -89,7 +100,7 @@ dotnet run --project src/Rampart.Cli -- check --preset balanced --json
 Override one or more settings with `--set <id>=<level>`:
 
 ```powershell
-dotnet run --project src/Rampart.Cli -- protect BirdRodeo.exe `
+dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
   --preset balanced `
   --set code-transformation.junk-insertion=heavy `
   --seed 88442211
@@ -101,11 +112,11 @@ sets every ready protection in a group while respecting each emitter's ceiling:
 
 ```powershell
 # Protect strings, plus the entry-point dispatcher required to decrypt them.
-dotnet run --project src/Rampart.Cli -- protect BirdRodeo.exe `
+dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
   --only strings.encryption,strings.coverage
 
 # Start Balanced, strengthen ready code transforms, then opt one feature out.
-dotnet run --project src/Rampart.Cli -- protect BirdRodeo.exe `
+dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
   --preset balanced `
   --group-level code-transformation=maximum `
   --disable code-transformation.mba-constants
@@ -128,25 +139,24 @@ PDB public symbols before the normal symbol-scrub pass. PDB reading uses
 build-only and are never copied into the protected executable.
 
 ```powershell
-dotnet run --project src/Rampart.Cli -- protect BirdRodeo.exe `
-  --map BirdRodeo.map `
-  --include-symbol 'BirdRodeo::License::*' `
-  --exclude-symbol 'BirdRodeo::Renderer::*' `
+dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
+  --map ExampleApp.map `
+  --include-symbol 'ExampleApp::License::*' `
+  --exclude-symbol 'ExampleApp::Renderer::*' `
   --rva-range 0x14200-0x14980 `
-  --function-profile 'BirdRodeo::ValidatePurchase=maximum'
+  --function-profile 'ExampleApp::ValidatePurchase=maximum'
 ```
 
 For module, section, namespace, source-file, or mixed policies, use ordered
 `Rules` in a configuration file. The last matching rule wins per protection.
-`samples/bird-rodeo.rules.json` is a complete example. Current function-level
-policy applies to import-reference concealment, junk insertion, string
+Function-level policy applies to import-reference concealment, junk insertion, string
 encryption, string anti-instrumentation, and string coverage; image-wide PE and
 startup transforms continue to use the global level.
 
 Every successful build writes a private `<output-name>.rmap.json` sidecar by
 default. It records original/protected RVAs, function identity, hashes, and the
 effective per-function settings for crash-symbolication and build telemetry.
-Keep this file with private build artifacts, not beside the distributed game.
+Keep this file with private build artifacts, not beside the distributed application.
 Use `--symbol-map <file>` to choose its location or `--no-symbol-map` to opt out.
 
 ### PE compatibility
@@ -159,10 +169,16 @@ startup work is routed through a newly registered guarded entry target so the
 original TLS metadata remains intact. `rampart inspect` reports the detected
 compatibility surface.
 
-Compatibility validation pins FFmpeg, SQLite, 7-Zip, curl, Lua, Git-for-Windows
-utilities, and SDL. It checks exact behavior, hashes, output growth, and median
-startup time across runs. Our goal is to have absolute certainty in the 
-capabilities of Rampart.
+Before a release, maintainers run a separate internal compatibility harness on
+Windows. Its pinned corpus currently includes FFmpeg, SQLite, 7-Zip, curl, Lua,
+Git for Windows, SDL, and VLC. It compares exit codes and output from
+the original and protected programs, and records hashes, output growth, and
+median startup time across repeated runs.
+
+The harness, downloaded programs, and result history are internal release
+evidence and are deliberately excluded from this public repository. The commands
+above are the complete test procedure available to contributors from this
+checkout; the external corpus is not part of `dotnet test`.
 
 ## Design principles
 

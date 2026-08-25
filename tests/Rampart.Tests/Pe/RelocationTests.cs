@@ -13,7 +13,7 @@ public class RelocationTests
     [Fact]
     public void RebuiltDirectoryRoundTripsAddedDir64Slots()
     {
-        byte[] input = SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
+        byte[] input = TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
         var pe = PeImage.Load(input);
         var settings = ProtectionSettings.FromPreset(Presets.Light);
         var context = new BuildContext(pe, settings, KnobCatalog.Load());
@@ -31,7 +31,7 @@ public class RelocationTests
     [Fact]
     public void TlsDirectoryAbsoluteFieldsReceiveDir64Relocations()
     {
-        byte[] input = SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
+        byte[] input = TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
         var pe = PeImage.Load(input);
         var context = new BuildContext(
             pe,
@@ -50,21 +50,21 @@ public class RelocationTests
     [Fact]
     public void TlsChainingPreservesExistingRawDataAndIndexFields()
     {
-        byte[] input = SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
+        byte[] input = TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
         var pe = PeImage.Load(input);
         var context = new BuildContext(
             pe,
             ProtectionSettings.FromPreset(Presets.Light),
             KnobCatalog.Load());
 
-        uint rawStart = context.Alloc(16, 8);
-        uint index = context.Alloc(8, 8);
+        uint rawStart = context.AllocData(16, 8);
+        uint index = context.AllocData(8, 8);
         uint oldCallback = context.Alloc(1, 16);
         context.WriteStub(oldCallback, [0xC3]);
-        uint oldCallbacks = context.Alloc(16, 8);
-        context.WriteStub(oldCallbacks, BitConverter.GetBytes(pe.ImageBase + oldCallback));
+        uint oldCallbacks = context.AllocData(16, 8);
+        context.WriteData(oldCallbacks, BitConverter.GetBytes(pe.ImageBase + oldCallback));
 
-        uint oldDirectory = context.Alloc(40, 8);
+        uint oldDirectory = context.AllocData(40, 8);
         var oldBlob = new byte[40];
         BinaryPrimitives.WriteUInt64LittleEndian(oldBlob, pe.ImageBase + rawStart);
         BinaryPrimitives.WriteUInt64LittleEndian(oldBlob.AsSpan(8), pe.ImageBase + rawStart + 16);
@@ -72,7 +72,7 @@ public class RelocationTests
         BinaryPrimitives.WriteUInt64LittleEndian(oldBlob.AsSpan(24), pe.ImageBase + oldCallbacks);
         BinaryPrimitives.WriteUInt32LittleEndian(oldBlob.AsSpan(32), 24);
         BinaryPrimitives.WriteUInt32LittleEndian(oldBlob.AsSpan(36), 0x0040_0000);
-        context.WriteStub(oldDirectory, oldBlob);
+        context.WriteData(oldDirectory, oldBlob);
         pe.SetDirectory(DataDir.Tls, oldDirectory, 40);
 
         uint newCallback = context.Alloc(1, 16);

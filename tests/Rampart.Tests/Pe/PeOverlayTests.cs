@@ -12,8 +12,8 @@ public class PeOverlayTests
     [Fact]
     public void OverlaySurvivesRoundTripAndSectionAddition()
     {
-        byte[] image = SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
-        byte[] overlay = "BIRD-RODEO-ASSET-OVERLAY"u8.ToArray();
+        byte[] image = TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
+        byte[] overlay = "EXAMPLE-APP-ASSET-OVERLAY"u8.ToArray();
         byte[] withOverlay = [.. image, .. overlay];
         var pe = PeImage.Load(withOverlay);
         pe.SetDirectory(DataDir.Security, (uint)image.Length, (uint)overlay.Length);
@@ -34,7 +34,7 @@ public class PeOverlayTests
     [Fact]
     public void MultiMegabyteOverlaySurvivesProtectionByteForByte()
     {
-        byte[] image = SamplePeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
+        byte[] image = TestPeBuilder.Build(ctx => ctx.Code.MovRi(Reg.Rax, 40));
         byte[] overlay = Enumerable.Range(0, 2 * 1024 * 1024)
             .Select(index => (byte)(index * 31))
             .ToArray();
