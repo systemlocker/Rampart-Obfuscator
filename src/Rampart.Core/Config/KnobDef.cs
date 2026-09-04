@@ -1,15 +1,14 @@
 namespace Rampart.Config;
 
-/// <summary>One tunable protection option. The catalog doubles as the public
-/// roadmap; <see cref="ProtectionCapabilities"/> distinguishes ready emitters
-/// from planned entries.</summary>
+/// <summary>Configuration metadata for one protection identifier.
+/// <see cref="ProtectionCapabilities"/> defines its supported levels.</summary>
 /// <param name="Id">Stable CLI identifier, e.g. "strings.encryption".</param>
-/// <param name="Group">One of the ten dashboard sections in <see cref="KnobGroups"/>.</param>
+/// <param name="Group">A protection group in <see cref="KnobGroups"/>.</param>
 /// <param name="Name">Human-readable name shown in `rampart knobs`.</param>
 /// <param name="Summary">One-line description of the mechanism.</param>
 /// <param name="Points">Protection-budget points for Light..Maximum (index = level-1).</param>
-/// <param name="LevelTexts">What each level adds over the previous one, Light..Maximum.
-/// Written so `rampart explain` can show a step-by-step level diff.</param>
+/// <param name="LevelTexts">Descriptions for Light..Maximum. Unsupported levels
+/// contain an availability notice, not a behavioral specification.</param>
 /// <param name="Tags">Threat-focus tags used by the dials, e.g. "static", "debug".</param>
 public sealed record KnobDef(
     string Id,
@@ -29,8 +28,7 @@ public sealed record KnobDef(
     public bool HasTag(string tag) => Tags.Contains(tag, StringComparer.Ordinal);
 }
 
-/// <summary>The ten dashboard sections, ordered the way an attacker would approach
-/// the binary: static reading first, live analysis last.</summary>
+/// <summary>Protection groups, from file transformations to runtime checks.</summary>
 public static class KnobGroups
 {
     public const string Packaging = "packaging";
@@ -68,7 +66,7 @@ public static class KnobGroups
         AntiDebug => "Anti-debug",
         AntiInject => "Anti-inject",
         AntiSandbox => "Anti-sandbox",
-        AnalysisCrashers => "Analysis crashers",
+        AnalysisCrashers => "Analysis resistance",
         MemoryProtection => "Memory protection",
         Virtualization => "Virtualization",
         IntegrityBinding => "Integrity binding",

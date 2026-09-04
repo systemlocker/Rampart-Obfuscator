@@ -46,6 +46,8 @@ public sealed class Protector
 
         var ctx = new BuildContext(pe, settings, catalog, symbols);
         ctx.Analyze();
+        var packing = new SectionPackingPass();
+        packing.Prepare(ctx); // Capture original loader ownership before metadata is scrubbed.
 
         void RunAndRecord(Action action, params string[] knobs)
         {
@@ -69,13 +71,20 @@ public sealed class Protector
         }
 
         // --- passes, in order ---------------------------------------------------
-        RunAndRecord(() => new VirtualizationPass().Run(ctx), "virtualization.per-build-isa");
-        new CodeTransformPass().Run(ctx);         // junk / MBA / flattening / nanomites
+        new VirtualizationPass().Run(ctx);
+        new ControlFlowFlatteningPass().Run(ctx); // VM ownership wins on overlapping selections.
+        new CodeTransformPass().Run(ctx);         // remaining selected native bodies and padding
         RunAndRecord(() => new IdaBombPass().Run(ctx), "analysis.ida-bomb");
         RunAndRecord(() => new HexRaysDenialPass().Run(ctx), "analysis.hexrays-denial");
         RunAndRecord(() => new SymbolicDenialPass().Run(ctx), "analysis.symbolic-denial");
         RunAndRecord(() => new StaticDecodeDenialPass().Run(ctx), "analysis.static-decode-denial");
-        new StringProtectionPass().Run(ctx);      // encrypt strings, register decryptor init
+        int beforeStrings = ctx.InitChain.Count;
+        new StringProtectionPass().Run(ctx);
+        // Byte rewriting still precedes import and integrity emission. Execution
+        // is different: shared detections/taint must be processed before string
+        // keys are consumed, and mapped-header scrubbing must happen afterward.
+        uint[] stringInitializers = ctx.InitChain.Skip(beforeStrings).ToArray();
+        ctx.InitChain.RemoveRange(beforeStrings, stringInitializers.Length);
         RunAndRecord(() => new ApiConcealmentPass().Run(ctx), "memory.api-concealment");
         new ImportConcealmentPass().Run(ctx);     // hash-resolved IAT, register resolver init
         RunAndRecord(() => new AntiDebugPass().Run(ctx),
@@ -96,8 +105,12 @@ public sealed class Protector
             "integrity.tls-veh-ownership", "integrity.mitigation-stack",
             "response.silent-taint", "response.tool-response",
             "response.brand-overlay", "response.custom-messages");
+        ctx.InitChain.AddRange(stringInitializers);
+        if (stringInitializers.Length != 0)
+            runtimeHardening.RegisterAfterStringInitializers(ctx);
         RunAndRecord(() => new RuntimeHeaderProtectionPass().Run(ctx),
             "analysis.runtime-header-corruption", "memory.anti-dump", "integrity.header-scrub");
+        packing.Run(ctx); // Its decoder must precede all other startup routines.
         RunAndRecord(() => new EntryPointPass().Run(ctx), "packaging.ep-confusion");
         runtimeHardening.RunAfterEntryPoint(ctx);      // outer TLS monitor after dispatcher exists
 
@@ -144,10 +157,14 @@ public sealed class Protector
                     Section = function.Section,
                     Source = function.Source,
                     OriginalRva = function.BeginRva,
-                    // Current ready transforms preserve original function RVAs.
-                    // Separate fields keep this sidecar compatible with later
-                    // relocation and virtualization emitters.
-                    ProtectedRva = function.BeginRva,
+                    // Keep the original public entry for source lookup, while
+                    // the protected range identifies the relocated body.
+                    ProtectedRva = ctx.FunctionTransformations.TryGetValue(function.BeginRva, out var transformed)
+                        ? transformed.ProtectedRva : function.BeginRva,
+                    ProtectedSize = ctx.FunctionTransformations.TryGetValue(function.BeginRva, out var body)
+                        ? body.ProtectedSize : null,
+                    Transformation = ctx.FunctionTransformations.TryGetValue(function.BeginRva, out var owner)
+                        ? owner.Pass : null,
                     Size = function.Size,
                     Applied = ctx.FunctionPolicy.EffectiveLevels(function),
                 }).ToList(),

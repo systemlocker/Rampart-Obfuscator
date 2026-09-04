@@ -1,7 +1,7 @@
 namespace Rampart.Config;
 
-/// <summary>The full knob catalog. Filled by <see cref="KnobCatalogData"/> — one
-/// entry per tunable option, ten groups, driven end-to-end by the engine.</summary>
+/// <summary>Configuration metadata, including disabled compatibility identifiers.
+/// Use <see cref="ProtectionCapabilities"/> to determine supported options.</summary>
 public sealed class KnobCatalog
 {
     private readonly Dictionary<string, KnobDef> _byId;
@@ -34,9 +34,8 @@ public sealed class KnobCatalog
     public int Count => _ordered.Count;
 
     /// <summary>Total protection-budget points a configuration spends. Rampart
-    /// does not gate on budget (there is no tier to sell), but the number is
-    /// reported so a configuration can be compared against the reference
-    /// 20-point ceiling the public feature list describes.</summary>
+    /// does not gate on budget. The relative total helps compare configurations;
+    /// it is not a measurement of runtime cost or protection strength.</summary>
     public static int BudgetFor(ProtectionSettings settings, KnobCatalog catalog) =>
         catalog.All.Sum(k => k.PointsAt(settings.LevelOf(k)));
 }

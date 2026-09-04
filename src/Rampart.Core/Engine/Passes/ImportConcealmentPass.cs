@@ -1,240 +1,180 @@
-using System.Buffers.Binary;
+using System.Text;
+using Rampart.Imports;
 using Rampart.Pe;
 using Rampart.X64;
 
 namespace Rampart.Engine.Passes;
 
-/// <summary>Import concealment. The classic import table (descriptors, name
-/// strings, hint tables, IAT) is the first thing an analyst enumerates. This
-/// pass:
-///   1. parses every import,
-///   2. allocates a concealed slot array in the protector section,
-///   3. rewrites every rip-relative reference to an IAT slot so it points at the
-///      concealed slot instead (same instruction length; the decoder pins each
-///      site — anything undecodable is left alone),
-///   4. registers an init routine that copies each loader-resolved address from
-///      the original IAT into the concealed slots, then — from Balanced up —
-///      zeroes the original IAT and name strings on disk, so tooling that
-///      re-reads the import structures finds nothing ("the import table indexes
-///      to nothing on disk").
-/// Hash-based re-resolution (no loader involvement at all) layers on top via the
-/// runtime library and turns on at Heavy.</summary>
+/// <summary>Repoints selected ordinary import loads and transfers to slots populated
+/// by a seeded export-name lookup. Original loader metadata remains authoritative
+/// for module lifetime and for references outside the decoder's supported scope.</summary>
 public sealed class ImportConcealmentPass
 {
+    private sealed record Site(uint Rva, int Length, ImportedFunction Import);
+
     public void Run(BuildContext ctx)
     {
-        var level = ctx.MaximumFunctionLevel("packaging.import-concealment");
-        if (level == Config.ProtectionLevel.Off)
+        if (ctx.MaximumFunctionLevel("packaging.import-concealment") == Config.ProtectionLevel.Off)
             return;
-
-        var pe = ctx.Pe;
-        var imports = ImportTable.Parse(pe);
+        // CFG startup runs at the entry point, after existing TLS callbacks.
+        // Callback reachability is not available, so none of their possible
+        // callees may be redirected to slots that are still zero at that time.
+        if (PeCompatibility.Inspect(ctx.Pe).GuardCf && !ctx.Pe.Directory(DataDir.Tls).IsEmpty)
+        {
+            ctx.Log.Add(new("imports", "CFG image with existing TLS: retained loader references because initialization precedes neither callback nor its callees"));
+            return;
+        }
+        List<ImportedFunction> imports = ImportTable.Parse(ctx.Pe).Where(IsEligible).ToList();
+        var bySlot = imports.ToDictionary(imported => imported.ThunkRva);
+        var sites = new List<Site>();
+        var addressSensitiveSlots = new HashSet<uint>();
+        foreach (var function in ctx.Functions)
+        {
+            bool selected = ctx.LevelFor("packaging.import-concealment", function) != Config.ProtectionLevel.Off;
+            if (!ctx.Pe.TryRvaToOffset(function.BeginRva, out int offset))
+                continue;
+            var section = ctx.Pe.SectionFromRva(function.BeginRva)!;
+            int available = checked((int)Math.Min(function.Size,
+                section.PointerToRawData + section.SizeOfRawData - (uint)offset));
+            ReadOnlySpan<byte> code = section.Data.AsSpan(offset - (int)section.PointerToRawData, available);
+            for (int pos = 0; pos < code.Length;)
+            {
+                uint rva = function.BeginRva + (uint)pos;
+                if (!X64Decoder.TryDecode(code, pos, rva, out var instruction))
+                    break;
+                // Never rewrite LEA (slot identity can escape), stores, prefixed
+                // operands, or instructions with trailing immediates. Their disp32
+                // is not necessarily the last operand, unlike these exact forms.
+                ReadOnlySpan<byte> bytes = code.Slice(pos, instruction.Length);
+                bool supported = (bytes.Length == 6 && bytes[0] == 0xFF && bytes[1] is 0x15 or 0x25)
+                    || (bytes.Length == 7 && bytes[0] is 0x48 or 0x4C && bytes[1] == 0x8B
+                        && (bytes[2] & 0xC7) == 0x05);
+                if (instruction.HasRipRelative && bySlot.TryGetValue(instruction.RipTargetRva, out var imported))
+                {
+                    if (!supported)
+                        // Also inspect excluded functions: a slot whose address
+                        // escapes (or is written) cannot safely be duplicated for
+                        // a selected caller. Decoder gaps still retain the IAT.
+                        addressSensitiveSlots.Add(imported.ThunkRva);
+                    else if (selected)
+                        sites.Add(new(rva, instruction.Length, imported));
+                }
+                pos += instruction.Length;
+            }
+        }
+        sites.RemoveAll(site => addressSensitiveSlots.Contains(site.Import.ThunkRva));
+        imports = sites.Select(site => site.Import).Distinct().ToList();
         if (imports.Count == 0)
         {
-            ctx.Log.Add(new("imports", "no imports to conceal"));
+            ctx.Log.Add(new("imports", "no supported ordinary named-import references; loader metadata retained"));
             return;
         }
 
-        uint slotsRva = ctx.AllocData(imports.Count * 8 + 8, 8);
-
-        int rewrites = RewriteIatReferences(ctx, imports, slotsRva);
-
-        // The resolver zeroes the original IAT slots in memory after copying
-        // them into the concealed array — those slots live in sections that
-        // are conventionally read-only, so they must be writable at runtime.
-        if (ctx.Level("packaging.import-concealment") >= Config.ProtectionLevel.Balanced)
+        var bootstrap = ImportDirectoryEditor.EnsureNamedImports(ctx, "KERNEL32.dll",
+            "GetModuleHandleA", "GetProcAddress", "GetLastError", "SetLastError");
+        ulong seed = unchecked((ulong)ctx.Rng.NextInt64()) | 1;
+        byte[] resolver = ExportHashResolver.Emit(seed);
+        uint resolverRva = ctx.Alloc(resolver.Length, 16);
+        ctx.WriteStub(resolverRva, resolver);
+        uint slotsRva = ctx.AllocData(imports.Count * 8, 8);
+        uint init = EmitInitializer(ctx, imports, seed, resolverRva, slotsRva, bootstrap);
+        var slots = imports.Select((imported, index) => (imported.ThunkRva, Slot: slotsRva + (uint)(index * 8)))
+            .ToDictionary(item => item.ThunkRva, item => item.Slot);
+        int rewritten = 0;
+        foreach (Site site in sites.DistinctBy(site => site.Rva))
         {
-            foreach (var sec in imports
-                         .Where(i => pe.TryRvaToOffset(i.ThunkRva, out _))
-                         .Select(i => pe.SectionFromRva(i.ThunkRva))
-                         .Distinct())
-                sec!.Characteristics |= SectionCharacteristics.MemWrite;
+            long displacement = (long)slots[site.Import.ThunkRva] - (site.Rva + site.Length);
+            if (displacement is < int.MinValue or > int.MaxValue)
+                continue;
+            ctx.Pe.WriteRva(site.Rva + (uint)site.Length - 4, BitConverter.GetBytes((int)displacement));
+            rewritten++;
         }
-
-        uint initRva = EmitCopier(ctx, imports, slotsRva);
-        ctx.RegisterInit(initRva, $"import resolver ({imports.Count} functions, {rewrites} call sites)");
-
-        if (level >= Config.ProtectionLevel.Balanced)
-        {
-            // Zero the readable structures on disk: descriptors, INT arrays,
-            // DLL name strings, hint/name pairs.
-            var dir = pe.Directory(DataDir.Import);
-            if (!dir.IsEmpty)
-            {
-                SymbolScrubPass.ZeroRva(pe, dir.RelativeVirtualAddress, (int)Math.Min(dir.Size, 0x4000));
-                ZeroImportNames(pe, imports);
-            }
-        }
-        if (level >= Config.ProtectionLevel.Heavy)
-        {
-            pe.SetDirectory(DataDir.Import, 0, 0);
-            pe.SetDirectory(DataDir.Iat, 0, 0);
-        }
-
-        ctx.Log.Add(new("imports",
-            $"concealed {imports.Count} imports behind slot array at {slotsRva:X8}; {rewrites} references rewritten" +
-            (level >= Config.ProtectionLevel.Balanced ? "; name/descriptor data zeroed" : "") +
-            (level >= Config.ProtectionLevel.Heavy ? "; import+IAT directories dropped" : "")));
-        ctx.MarkApplied("packaging.import-concealment", level);
-        if (ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
-            ctx.MarkApplied("code-transformation.mba-constants");
+        ctx.RegisterInit(init, $"hash import resolver ({imports.Count} functions, {rewritten} sites)");
+        if (rewritten > 0)
+            ctx.MarkApplied("packaging.import-concealment", Config.ProtectionLevel.Light);
+        ctx.Log.Add(new("imports", $"seeded export-name lookup for {imports.Count} imports; {rewritten} references rewritten; " +
+            "original descriptors, names and IAT retained; ordinals/API sets/unsupported references unchanged; loader fallback on lookup failure"));
     }
 
-    /// <summary>Finds every rip-relative instruction targeting the classic IAT
-    /// and repoints its disp32 at the matching concealed slot. Instruction
-    /// lengths never change (both sides use disp32 RIP-relative forms).</summary>
-    private static int RewriteIatReferences(BuildContext ctx, List<ImportedFunction> imports, uint slotsRva)
+    private static bool IsEligible(ImportedFunction imported) =>
+        !imported.Name.StartsWith('#')
+        && !imported.Dll.StartsWith("api-", StringComparison.OrdinalIgnoreCase)
+        && !imported.Dll.StartsWith("ext-", StringComparison.OrdinalIgnoreCase)
+        && !imported.Dll.Contains('/') && !imported.Dll.Contains('\\')
+        && imported.Name.All(character => character is > '\0' and <= '\x7F');
+
+    private static uint EmitInitializer(BuildContext ctx, List<ImportedFunction> imports, ulong seed,
+        uint resolverRva, uint slotsRva, IReadOnlyDictionary<string, uint> bootstrap)
     {
-        var pe = ctx.Pe;
-        var slotMap = new Dictionary<uint, uint>();
-        for (int i = 0; i < imports.Count; i++)
-            slotMap[imports[i].ThunkRva] = slotsRva + (uint)(i * 8);
-
-        int rewrites = 0;
-        foreach (var func in ctx.Functions)
-        {
-            if (ctx.LevelFor("packaging.import-concealment", func) == Config.ProtectionLevel.Off)
-                continue;
-            if (!pe.TryRvaToOffset(func.BeginRva, out int off))
-                continue;
-            var sec = pe.SectionFromRva(func.BeginRva)!;
-            int avail = (int)Math.Min(func.EndRva - func.BeginRva, sec.PointerToRawData + sec.SizeOfRawData - (uint)off);
-            if (avail <= 0)
-                continue;
-            var code = sec.Data;
-            int baseIndex = off - (int)sec.PointerToRawData;
-
-            int pos = 0;
-            while (pos < avail)
-            {
-                if (!X64Decoder.TryDecode(code.AsSpan(baseIndex, avail), pos, func.BeginRva + (uint)pos, out var instr))
-                    break;
-                if (instr.HasRipRelative && slotMap.TryGetValue(instr.RipTargetRva, out uint newSlot))
-                {
-                    // For call/jmp/[rip+d] loads there is no immediate: the disp32
-                    // is the last 4 bytes of the instruction.
-                    int dispPos = baseIndex + pos + instr.Length - 4;
-                    int nextInstrRva = (int)(func.BeginRva + (uint)(pos + instr.Length));
-                    BinaryPrimitives.WriteInt32LittleEndian(code.AsSpan(dispPos), (int)newSlot - nextInstrRva);
-                    rewrites++;
-                }
-                pos += instr.Length;
-            }
-        }
-        return rewrites;
-    }
-
-    /// <summary>Init routine: for each import, copy the loader-resolved pointer
-    /// from the original IAT slot into the concealed slot; from Balanced, also
-    /// zero the original slot in memory afterwards (runtime values live only in
-    /// our array from then on). The (origSlotRva, ourSlotRva) pairs ride as data
-    /// XOR-masked with a build value.</summary>
-    private static uint EmitCopier(BuildContext ctx, List<ImportedFunction> imports, uint slotsRva)
-    {
-        ulong mask = (ulong)ctx.Rng.NextInt64() | 0x1;
-        bool destroy = ctx.Level("packaging.import-concealment") >= Config.ProtectionLevel.Balanced;
-        bool splitConstants = ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off;
-        long maskSplit = ctx.Rng.NextInt64() | 1;
-
-        var pairs = new byte[imports.Count * 16 + 16];
-        for (int i = 0; i < imports.Count; i++)
-        {
-            BinaryPrimitives.WriteUInt64LittleEndian(pairs.AsSpan(i * 16), imports[i].ThunkRva ^ mask);
-            BinaryPrimitives.WriteUInt64LittleEndian(pairs.AsSpan(i * 16 + 8), (slotsRva + (uint)(i * 8)) ^ mask);
-        }
-        // The runtime XORs the first qword before its zero check; encode the
-        // terminator with the same mask as every real record.
-        BinaryPrimitives.WriteUInt64LittleEndian(pairs.AsSpan(imports.Count * 16), mask);
-
         Asm Build(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.Rbx); a.PushR(Reg.R12); a.PushR(Reg.R14); a.PushR(Reg.R15);
-            a.SubRi(Reg.Rsp, 8);
-            a.LoadRuntimeBase(Reg.R15, selfRva);     // r15 = runtime image base
-
-            if (splitConstants)
-                a.MovRiXorSplit(Reg.R14, unchecked((long)mask), Reg.Rax, maskSplit);
-            else
-                a.MovRi(Reg.R14, unchecked((long)mask));
-            a.LeaRip(Reg.Rbx, "pairs");
-
-            a.Label("loop");
-            a.MovRm(Reg.Rax, Reg.Rbx, 0);
-            a.XorRr(Reg.Rax, Reg.R14);               // rax = original slot RVA
-            a.TestRr(Reg.Rax, Reg.Rax);
-            a.Jcc(Cc.E, "done");
-            a.AddRr(Reg.Rax, Reg.R15);               // rax = original slot VA
-            a.MovRm(Reg.R12, Reg.Rbx, 8);
-            a.XorRr(Reg.R12, Reg.R14);               // r12 = concealed slot RVA
-            a.AddRr(Reg.R12, Reg.R15);               // r12 = concealed slot VA
-
-            a.MovRm(Reg.Rax, Reg.Rax, 0);            // rax = resolved function pointer
-            a.MovMr(Reg.R12, Reg.Rax, 0);            // concealed slot = pointer
-            if (destroy)
+            a.PushR(Reg.R15);
+            a.SubRi(Reg.Rsp, 48); // home area plus a saved last-error value
+            a.LoadRuntimeBase(Reg.R15, selfRva);
+            a.MovRi(Reg.Rax, bootstrap["GetLastError"]);
+            a.AddRr(Reg.Rax, Reg.R15);
+            a.CallMem(Reg.Rax);
+            a.MovMr(Reg.Rsp, Reg.Rax, 32);
+            for (int i = 0; i < imports.Count; i++)
             {
-                // Zero the ORIGINAL slot: from here on the runtime value lives
-                // only in the concealed array.
-                a.MovRm(Reg.Rax, Reg.Rbx, 0);
-                a.XorRr(Reg.Rax, Reg.R14);
-                a.AddRr(Reg.Rax, Reg.R15);           // rax = original slot VA
-                a.MovRi(Reg.R12, 0);
-                a.MovMr(Reg.Rax, Reg.R12, 0);
+                ImportedFunction imported = imports[i];
+                a.LeaRip(Reg.Rcx, $"dll{i}");
+                a.MovRi(Reg.Rax, bootstrap["GetModuleHandleA"]);
+                a.AddRr(Reg.Rax, Reg.R15);
+                a.CallMem(Reg.Rax);
+                a.TestRr(Reg.Rax, Reg.Rax);
+                a.Jcc(Cc.E, $"fallback{i}");
+                a.MovRr(Reg.Rcx, Reg.Rax);
+                a.LeaRip(Reg.Rdx, $"name{i}");
+                a.MovRi(Reg.R8, unchecked((long)ExportHashResolver.Hash(imported.Name, seed)));
+                a.MovRi(Reg.R9, bootstrap["GetProcAddress"]);
+                a.AddRr(Reg.R9, Reg.R15);
+                a.MovRm(Reg.R9, Reg.R9);
+                a.CallRva(selfRva, resolverRva);
+                a.TestRr(Reg.Rax, Reg.Rax);
+                a.Jcc(Cc.E, $"fallback{i}");
+                // Basename lookup can select a different side-by-side module.
+                // Accept independent resolution only when it agrees with the
+                // loader's binding; this also retains legitimate IAT redirections.
+                a.MovRi(Reg.Rdx, imported.ThunkRva);
+                a.AddRr(Reg.Rdx, Reg.R15);
+                a.MovRm(Reg.Rdx, Reg.Rdx);
+                a.CmpRr(Reg.Rax, Reg.Rdx);
+                a.Jcc(Cc.E, $"store{i}");
+                a.Label($"fallback{i}");
+                // Existing static imports retain dependency ownership. No new
+                // LoadLibrary/FreeLibrary calls occur under the TLS loader lock.
+                // Failure to independently resolve never replaces a valid IAT
+                // address with null or a potentially colliding export.
+                a.MovRi(Reg.Rax, imported.ThunkRva);
+                a.AddRr(Reg.Rax, Reg.R15);
+                a.MovRm(Reg.Rax, Reg.Rax);
+                a.Label($"store{i}");
+                a.MovRi(Reg.Rdx, slotsRva + (uint)(i * 8));
+                a.AddRr(Reg.Rdx, Reg.R15);
+                a.MovMr(Reg.Rdx, Reg.Rax);
             }
-
-            a.AddRi(Reg.Rbx, 16);
-            a.Jmp("loop");
-
-            a.Label("done");
-            a.AddRi(Reg.Rsp, 8);
-            a.PopR(Reg.R15); a.PopR(Reg.R14); a.PopR(Reg.R12); a.PopR(Reg.Rbx);
+            a.MovRm(Reg.Rcx, Reg.Rsp, 32);
+            a.MovRi(Reg.Rax, bootstrap["SetLastError"]);
+            a.AddRr(Reg.Rax, Reg.R15);
+            a.CallMem(Reg.Rax);
+            a.AddRi(Reg.Rsp, 48);
+            a.PopR(Reg.R15);
             a.Ret();
-
-            a.Align(8);
-            a.Label("pairs");
-            a.Db(pairs);
+            for (int i = 0; i < imports.Count; i++)
+            {
+                a.Label($"dll{i}"); a.Db(Encoding.ASCII.GetBytes(imports[i].Dll + "\0"));
+                a.Label($"name{i}"); a.Db(Encoding.ASCII.GetBytes(imports[i].Name + "\0"));
+            }
             return a;
         }
-
         int size = Build(0).Assemble().Length;
         uint rva = ctx.Alloc(size, 16);
         byte[] code = Build(rva).Assemble();
         if (code.Length != size)
-            throw new InvalidOperationException("Resolver size shifted between passes.");
+            throw new InvalidOperationException("Import initializer size changed during layout.");
         ctx.WriteStub(rva, code);
         return rva;
-    }
-
-    /// <summary>Zeros the readable import strings: DLL names via the descriptor
-    /// walk, hint/name blobs via the thunk walk.</summary>
-    private static void ZeroImportNames(PeImage pe, List<ImportedFunction> imports)
-    {
-        var dir = pe.Directory(DataDir.Import);
-        if (dir.IsEmpty)
-            return;
-        uint descRva = dir.RelativeVirtualAddress;
-        while (true)
-        {
-            var desc = pe.ReadRva(descRva, 20);
-            uint oft = BinaryPrimitives.ReadUInt32LittleEndian(desc);
-            uint nameRva = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(12));
-            uint ft = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(16));
-            if (oft == 0 && nameRva == 0 && ft == 0)
-                break;
-
-            if (nameRva != 0 && pe.SectionFromRva(nameRva) is { } nameSec && !nameSec.IsExecutable)
-                SymbolScrubPass.ZeroRva(pe, nameRva, 32); // DLL name + slack
-
-            uint thunk = oft != 0 ? oft : ft;
-            for (int i = 0; ; i++)
-            {
-                ulong entry = pe.ReadU64(thunk + (uint)(i * 8));
-                if (entry == 0)
-                    break;
-                if ((entry & 0x8000000000000000UL) == 0 && entry < pe.SizeOfImage)
-                    SymbolScrubPass.ZeroRva(pe, (uint)entry, 64); // hint/name + slack
-            }
-            descRva += 20;
-        }
     }
 }

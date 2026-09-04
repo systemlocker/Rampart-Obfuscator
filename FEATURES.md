@@ -1,20 +1,12 @@
 # Protection coverage
 
-Rampart protects selected parts of a native Windows application rather than
-treating "obfuscation" as a single switch. This document describes those
-protected surfaces, what is usable today, and where the public roadmap is
-headed.
+This guide describes Rampart's supported protections, their level ceilings, and
+compatibility requirements for native Windows x64 executables.
 
-Status terms used here:
-
-- **Ready** means Rampart has a working emitter and behavior-preservation tests.
-- **Planned** means the setting is part of the public configuration catalog but
-  cannot yet be emitted. Rampart rejects an explicit request for it.
-- **Candidate** means a useful direction that is not yet a stable catalog item.
-
-The exact level ceiling for each ready setting is intentional. Presets and bulk
-group changes clamp to that ceiling; an explicit unsupported level fails instead
-of silently doing less than requested.
+Presets and bulk group changes are limited to supported levels. An explicit
+request for an unsupported level fails validation. A supported setting may still
+skip an input region that does not meet its requirements; review the build log
+and applied-protection report for each output.
 
 ## Protected today
 
@@ -22,16 +14,18 @@ of silently doing less than requested.
 | --- | --- | --- | --- |
 | Build provenance and symbol clues | `packaging.symbol-scrub` | Heavy | Removes debug-directory and PDB-path data, the Rich header, section names, COFF symbol remnants, and build timestamps according to level. |
 | PE build identity | `packaging.header-disguise` | Balanced | Replaces genuine timestamp and selected linker metadata with build-seeded decoy values. |
-| Imported API surface | `packaging.import-concealment` | Light | Moves eligible imports behind a hash-resolved startup table so the ordinary import view reveals less. |
+| Imported call references | `packaging.import-concealment` | Light | Routes eligible references through seeded export-name hash lookup with exact collision verification and Windows-managed final binding. Original loader import names and bindings remain intact. |
 | Original entry path | `packaging.ep-confusion` | Light | Routes startup through a generated dispatcher which computes and transfers control to the original entry point. |
-| Native instruction stream | `code-transformation.junk-insertion` | Maximum | Adds semantics-preserving instruction noise and unreachable decoy branches to verified function regions. |
-| Constants in generated runtime code | `code-transformation.mba-constants` | Light | Splits constants in Rampart-generated stubs with per-build arithmetic identities. Target-function constant rewriting is not ready yet. |
+| Native instruction stream | `code-transformation.junk-insertion` | Maximum | Light fills verified padding; higher levels additionally rewrite explicitly selected, verified register-only leaf bodies with increasing in-body noise density. Heavy/Maximum include bounded dead branches. Padding alone reports Light. |
+| Constants in generated/runtime and selected native code | `code-transformation.mba-constants` | Balanced | Light splits generated constants; Balanced additionally reconstructs eligible target immediates through seeded modular arithmetic/boolean identities, preserving live flags. Stub-only work reports Light. |
 | Cross-build binary fingerprints | `code-transformation.per-build-mutation` | Light | Changes generated layout choices, register allocation, keys, and related emitted bytes from the build seed. |
 | Embedded ASCII and UTF-16 strings | `strings.encryption` | Balanced | Encrypts eligible referenced string runs in place and restores them during protected startup. |
-| String materialization sites | `strings.anti-instrumentation` | Light | Adds sentinels around generated string-decryption work to make simple breakpoint instrumentation less reliable. |
-| String-selection scope | `strings.coverage` | Maximum | Controls which referenced strings and sections are eligible, from conservative read-only runs to broad decodable coverage. |
+| String materialization sites | `strings.anti-instrumentation` | Light | Checks the decryptor instruction range and record table before use; detected modifications leave the affected strings encrypted and record a shared detection flag. |
+| String-selection scope | `strings.coverage` | Maximum | Selects referenced ASCII/UTF-16LE strings with six/eight/three-character floors at Light/Balanced/Heavy. Maximum uses the three-character floor and also permits initialized writable data. Loader-owned and overlapping ranges remain excluded. |
 
-The milestone expansion adds 29 independently selectable Light-level settings:
+## Runtime protection and analysis resistance
+
+The following settings support Light:
 
 | What is protected | Protection | What the verified Light emitter does |
 | --- | --- | --- |
@@ -55,15 +49,34 @@ The milestone expansion adds 29 independently selectable Light-level settings:
 | Sensitive API call sites | `memory.api-concealment` | Rewrites eligible direct IAT calls and jumps through protector-owned local tail thunks. |
 | Mapped section table | `integrity.header-scrub` | Clears every mapped section-table entry after startup while leaving the on-disk PE valid. |
 | Runtime sentinels | `integrity.kernel-wall` | Emits build-specific self-hashed sentinel words and records later modifications. |
-| Generated code | `integrity.measurement-channels` | Measures relocation-stable generated function ranges with a build-salted runtime hash. |
+| Native code and protected bodies | `integrity.measurement-channels` | Measures original functions and relocated protected bodies, including immutable VM bytecode, with a relocation-stable salted hash. |
 | TLS callback ownership | `integrity.tls-veh-ownership` | Stores and verifies the final callback-array identity without depending on scrubbed headers. |
 | Platform image mitigations | `integrity.mitigation-stack` | Asserts ASLR, high-entropy-VA, and DEP flags while preserving existing CFG metadata. |
 | Integrity monitor thread | `integrity.hidden-threads` | Starts a monitor worker, applies `ThreadHideFromDebugger`, and records the PEB debugger signal. |
-| Runtime key state | `response.silent-taint` | Idempotently taints protected session-key state when a shared detection flag is raised. |
+| Runtime key state | `response.silent-taint` | Idempotently taints session state on detection; opted-in startup string decryption consumes that key after startup checks. It does not re-encrypt previously decrypted strings. |
 | Safe detection response | `response.tool-response` | Converts a shared detection flag into a clean process exit; no destructive response is implemented. |
 | Build ownership | `response.brand-overlay` | Embeds a bounded build-specific owner/watermark record. |
 | Support diagnostics | `response.custom-messages` | Embeds a bounded diagnostic record and emits it to the debugger when detection state is raised. |
 | Post-start foreign loads | `nuclear.injection-hunter` | Classifies loader-notified module paths against runtime-captured application and Windows prefixes and records foreign loads. |
+
+## Selected-function transforms and data packing
+
+These Light-level settings require explicit selection:
+
+| What is protected | Protection | Verified Light scope |
+| --- | --- | --- |
+| Initialized writable data | `packaging.packer` | Compresses eligible original RW data sections and restores them before other startup work, preserving RVAs and permissions. Code packing and unsupported loader metadata are rejected. |
+| Selected native control flow | `code-transformation.flattening` | Rebuilds small, register-only, empty-unwind leaf functions with verified local conditional branches around a seeded state dispatcher. |
+| Selected leaf-function logic | `virtualization.per-build-isa` | Emits a real bytecode interpreter with per-build opcode assignments for a verified straight-line scalar accumulator subset. |
+| VM selection | `virtualization.coverage` | Requires explicit symbol/RVA selection or enabling rules, leaves unsupported functions native with logged reasons, and works together with the per-build ISA setting. |
+
+These native-body transforms currently reject load-configuration/CFG images and
+preserve original public entry addresses through direct transfers. Virtualization
+owns overlapping selections before flattening runs. Their private symbol maps
+record the relocated body ranges. Packing currently rejects original TLS,
+resources, complex unwind records, and other unsupported loader metadata; ordinary
+imports and relocations must be entirely outside packed data. These restricted
+emitters are off in every preset, including Nuclear.
 
 Environment probes, mapped-header changes, process-policy changes, response
 behavior, and background monitors remain explicit opt-ins rather than preset
@@ -89,6 +102,10 @@ Function-level settings currently apply to:
 - `strings.encryption`
 - `strings.anti-instrumentation`
 - `strings.coverage`
+- `code-transformation.flattening`
+- `code-transformation.mba-constants`
+- `virtualization.per-build-isa`
+- `virtualization.coverage`
 
 PE-wide metadata and startup transforms remain global. This prevents a
 function rule from pretending it can scope a structure that exists only once in
@@ -112,131 +129,17 @@ original/protected RVA mappings, hashes, function identity, and effective
 function settings. It is intended for private crash symbolication and build
 telemetry, not distribution with the application.
 
-## Remaining roadmap
-
-Nineteen settings remain planned in Rampart's stable catalog. Rampart rejects
-explicit requests for these settings until `rampart knobs` reports them ready.
-
-### On-disk image and static code
-
-| Catalog ID | Protected surface | Intended protection |
-| --- | --- | --- |
-| `packaging.packer` | PE sections and original layout | Compress sections behind a runtime unpacking stage and obscure their original boundaries. |
-| `code-transformation.flattening` | Function control-flow graphs | Rebuild verified functions around per-build state dispatch. |
-
-Rampart's scope is defensive transformation. Planned analysis resistance must
-remain valid input, must not target vulnerabilities in third-party tools, and
-must never damage an analyst's machine or data.
-
-### Injection and process boundaries
-
-| Catalog ID | Protected surface | Intended protection |
-| --- | --- | --- |
-| `integrity.loader-hijack` | Loader-mediated module admission | Apply an application-owned allow/deny policy to foreign module loads. |
-
-### Memory-resident code and data
-
-| Catalog ID | Protected surface | Intended protection |
-| --- | --- | --- |
-| `memory.at-rest-encryption` | Dormant heap, TLS, and selected data | Keep opted-in sensitive regions encrypted outside short use windows. |
-| `memory.stack-spoof` | Protected call-stack disclosure | Reduce useful application provenance in stack walks without breaking unwinding contracts. |
-| `memory.page-mode-decrypt` | Protected executable pages | Expose plaintext only for the page currently executing. |
-| `memory.sleep-mask` | Data and code during waits | Re-encrypt opted-in regions while protected threads are dormant. |
-| `nuclear.memory-ambush` | Memory-scanning assumptions | Mix bounded decoy regions and rotating indirection into the protected memory map. |
-
-### Virtualized functions
-
-| Catalog ID | Protected surface | Intended protection |
-| --- | --- | --- |
-| `virtualization.per-build-isa` | VM bytecode format | Generate a distinct opcode, operand, and virtual-register scheme per build. |
-| `virtualization.coverage` | Selected native functions | Control which verified functions are lifted to protected bytecode. |
-| `virtualization.extended-isa` | Complex native operations | Expand the verified lifter to selected SIMD, string, and atomic instructions. |
-| `virtualization.handler-polymorphism` | VM handler fingerprints | Vary handler implementation across builds and call sites. |
-| `virtualization.vm-nesting` | Critical virtualized paths | Run selected bytecode through a second, disjoint virtual machine. |
-| `virtualization.jit-handlers` | VM handler code at rest | Decrypt handler bodies only for their execution window. |
-| `virtualization.runtime-rekey` | Long-running VM bytecode | Move and re-key protected bytecode during execution. |
-| `virtualization.decoy-bodies` | Original function locations | Replace lifted bodies with plausible non-executing decoys. |
-
-### Runtime trust and tamper evidence
-
-| Catalog ID | Protected surface | Intended protection |
-| --- | --- | --- |
-| `integrity.self-debug-port` | Process debug-object ownership | Reserve the debug port for an application-owned monitor in explicitly opted-in builds. |
-
-Runtime signals require conservative policy. Virtual machines, accessibility
-software, compatibility layers, hosted desktops, and test automation are legitimate
-application environments and must not be treated as proof of tampering by themselves.
-
-### Detection response and build identity
-
-| Catalog ID | Protected surface | Intended protection |
-| --- | --- | --- |
-| `nuclear.nanomites` | Selected conditional control flow | Resolve opted-in branch decisions through an application-owned exception dispatcher. |
-| `nuclear.exception-flow` | Selected control-flow edges | Represent verified transitions through structured exceptions. |
-
-Destructive retaliation, security-tool corruption, persistence, and stealth
-intended to bypass endpoint monitoring are explicitly outside Rampart's scope.
-
-## Candidate additions
-
-These additions would close practical gaps for native applications and improve control over
-what is protected. They are proposals, not accepted catalog IDs.
-
-### More application assets
-
-- **PE resources:** selectors for resource type, name, and language, with
-  encryption for opted-in `RCDATA`, manifests, icons, dialogs, and version data.
-- **Shaders:** protection for embedded DXIL, DXBC, and SPIR-V blobs, with an
-  allowlist for blobs that must remain inspectable by graphics tooling.
-- **Scripts and bytecode:** dedicated handling for embedded Lua, JavaScript,
-  Python, and engine-specific bytecode rather than treating them as arbitrary
-  strings.
-- **Embedded archives and tables:** detection and selective encryption for ZIP,
-  pak, SQLite, JSON, and flat data bundled inside the executable or overlay.
-- **Secrets and protocol constants:** an opt-in class for license public keys,
-  endpoint metadata, matchmaking constants, and anti-cheat configuration, with
-  usage-window controls instead of permanent plaintext startup recovery.
-- **Resources outside the EXE:** a signed/encrypted asset manifest for adjacent
-  DLLs, plug-ins, content packs, and configuration files.
-
-### More precise policy
-
-- Select imports by module and symbol, strings by section/encoding/reference
-  owner, resources by type/name, and functions by risk class.
-- Allow independent confidentiality, tamper-evidence, and anti-instrumentation
-  policies for the same region.
-- Add explicit compatibility modes (`preserve`, `warn`, or `fail`) for CFG, CET,
-  TLS, unwind data, delay imports, overlays, and signing workflows.
-- Add transformation budgets for output growth, startup time, steady-state CPU,
-  working set, and worst-case latency.
-- Support build profiles such as `developer`, `qa`, `release`, and `tournament`,
-  including a deliberate diagnostics policy for crash reporters and profilers.
-
-### Better evidence and CI ergonomics
-
-- Emit a machine-readable coverage report explaining which assets were
-  protected, skipped, or rejected and why.
-- Compare two builds to show whether a seed changed the intended bytes while
-  behavior and public ABI remained stable.
-- Add signed configuration manifests and record their digest in the private map
-  so a release can be traced to the exact protection policy.
-- Provide policy linting for ineffective combinations, excessive performance
-  risk, and rules that match no functions or assets.
-- Grow the compatibility corpus around real application binaries, plug-in
-  loaders, graphics APIs, crash handlers, and applications with large resource
-  sections.
-
-## Discovering the live capability set
+## Inspecting supported capabilities
 
 This file explains coverage, but the CLI is the authority for the current
 build. Use:
 
 ```powershell
-dotnet run --project src/Rampart.Cli -- knobs --ready
+dotnet run --project src/Rampart.Cli -- knobs
 dotnet run --project src/Rampart.Cli -- knobs --json
 dotnet run --project src/Rampart.Cli -- explain strings.encryption
 dotnet run --project src/Rampart.Cli -- check --preset balanced --json
 ```
 
-Rampart never reports a planned protection as applied. That invariant is more
-important than the size of the roadmap.
+Use the build's applied-protection report to confirm which settings changed the
+output. Configuration selection alone does not establish coverage.

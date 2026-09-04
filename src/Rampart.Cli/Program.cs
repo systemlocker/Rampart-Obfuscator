@@ -62,7 +62,7 @@ internal static class Program
               protect <file>   protect a PE image
               inspect <file>   display PE and Rampart metadata
               check            validate a configuration and show concerns
-              knobs            list ready and planned protection knobs
+              knobs            list supported protection options
               explain <id>     show the level-by-level behavior of one knob
               version          print the version
 

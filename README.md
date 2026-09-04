@@ -5,24 +5,21 @@ applications. It reshapes x64 executables with reproducible,
 per-build transforms while keeping the build configuration and resulting changes
 inspectable.
 
-The project is early-stage software. Protect copies of your binaries, keep the
-original build artifacts, and test protected output on every Windows version you
-support. Obfuscation can raise the cost of reverse engineering substantially.
+Protect copies of your binaries, keep the original build artifacts, and test
+protected output on every Windows version you
+support. Obfuscation does not replace secure application design or server-side
+validation of sensitive operations.
 
-## Current status
+## Supported capabilities
 
-Rampart's catalog doubles as its roadmap. `rampart knobs` labels every entry as
-ready or planned, and the engine rejects a requested level that does not yet have
-a working emitter. Presets are automatically clamped to the highest verified
-level for each ready protection.
+Rampart provides PE metadata transforms, import-reference concealment, startup
+string protection, selected native-function transformations, and opt-in runtime
+integrity checks. `rampart knobs` lists supported settings; `rampart explain`
+describes their available levels. Presets stay within those level ceilings, and
+explicit unsupported requests fail validation.
 
-Rampart currently reports 39 of 58 catalog settings ready. The latest milestone
-completed 29 of the 48 settings that were previously roadmap-only, including all
-four anti-debug settings plus bounded IDA autoanalysis and Hex-Rays decompilation
-resistance.
-
-See [Protection coverage](FEATURES.md) for the asset-by-asset feature matrix,
-the complete ready/roadmap catalog, and candidate additions for native binaries.
+See [Protection coverage](FEATURES.md) for supported mechanisms, selection
+requirements, and compatibility limits.
 
 | Protection | Verified through |
 | --- | --- |
@@ -32,9 +29,10 @@ the complete ready/roadmap catalog, and candidate additions for native binaries.
 | Entry-point routing and disassembly confusion | Light |
 | Junk/dead-code insertion | Maximum |
 | Runtime-stub constant splitting | Light |
+| Selected native-function constant splitting | Balanced |
 | Per-build mutation | Light |
 | Layered string encryption | Balanced |
-| String anti-instrumentation sentinels | Light |
+| String decryptor/table integrity checks | Light |
 | String coverage tuning | Maximum |
 | IDA, Hex-Rays, symbolic, and static-decode resistance | Light |
 | Runtime PE-signature, anti-dump, and section-table scrubbing | Light |
@@ -45,26 +43,26 @@ the complete ready/roadmap catalog, and candidate additions for native binaries.
 | Runtime sentinels, code measurements, TLS ownership, and mitigation flags | Light |
 | Hidden integrity-monitor thread and foreign-module observation | Light |
 | Silent taint, clean exit, watermark, and diagnostic responses | Light |
+| Initialized writable-data packing | Light |
+| Selected leaf-function control-flow flattening | Light |
+| Per-build leaf-function VM and explicit coverage | Light |
 
-The build pipeline currently targets PE32+ AMD64 images. Its native integration
-test generates a small Windows executable, protects it with the Balanced preset,
-executes the result under ASLR, and verifies that behavior is preserved.
+The build pipeline targets PE32+ AMD64 images and preserves ASLR relocations.
 Native executable overlays are retained after the new Rampart section. DLLs,
 managed .NET images, and already-protected inputs are rejected during preflight.
 Because transforms invalidate Authenticode, sign the protected output rather than
 the input binary.
 
-## Build and test
+## Build
 
 Install the .NET 8 SDK, then run:
 
 ```powershell
 dotnet build Rampart.slnx
-dotnet test Rampart.slnx
 ```
 
-The core library and PE generation tests are cross-platform. Native execution
-verification runs only on Windows.
+The core library builds cross-platform. Run and verify protected executables on
+the Windows versions supported by your application.
 
 ## Quick start
 
@@ -92,7 +90,7 @@ the input path itself as the output path.
 Useful discovery commands:
 
 ```powershell
-dotnet run --project src/Rampart.Cli -- knobs --ready
+dotnet run --project src/Rampart.Cli -- knobs
 dotnet run --project src/Rampart.Cli -- explain strings.encryption
 dotnet run --project src/Rampart.Cli -- check --preset balanced --json
 ```
@@ -126,8 +124,8 @@ Bulk group levels clamp to verified emitter ceilings; exact `--set` requests sta
 strict and fail if that particular level is not implemented. A final `--disable`
 that turns off a required dependency also fails validation with an explanation.
 
-Levels are `off`, `light`, `balanced`, `heavy`, and `maximum`. A planned knob or
-an unimplemented level fails clearly instead of being reported as applied.
+Levels are `off`, `light`, `balanced`, `heavy`, and `maximum`. Unsupported settings
+and levels fail validation instead of being reported as applied.
 Configuration JSON emitted by `--dry-run --json` can be loaded with
 `--config <file>`.
 
@@ -149,13 +147,82 @@ dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
 
 For module, section, namespace, source-file, or mixed policies, use ordered
 `Rules` in a configuration file. The last matching rule wins per protection.
-Function-level policy applies to import-reference concealment, junk insertion, string
+Function-level policy applies to import-reference concealment, junk insertion, target constant splitting, string
 encryption, string anti-instrumentation, and string coverage; image-wide PE and
 startup transforms continue to use the global level.
+
+The Light VM and control-flow flattening also accept function policies, but
+require explicit symbol/RVA selection or a matching enabling rule. These
+native-body emitters accept only small, single-entry, register-only leaf functions
+with empty unwind records. They leave unsupported functions native and explain
+each skip in the build log. The VM supports a straight-line scalar accumulator
+subset; flattening supports a conditional 32-bit register-only control-flow subset.
+Neither accepts load-configuration/CFG images. When both select the same
+function, virtualization has priority, followed by flattening, then native junk
+and constant rewriting. Later passes never rewrite a body already owned by an
+earlier native transform.
+
+Balanced MBA can split target immediates in the verified 32-bit native subset.
+Balanced through Maximum junk levels add increasing densities of executed,
+flag-preserving noise; Heavy and Maximum also add branches over cold gadgets.
+These body transforms require explicit function selection. If only padding noise
+or generated-stub constants were changed, the applied report records Light—not
+the higher requested native-body level. Flags live across branches and loops are
+preserved, and unsafe constant rewrites are skipped.
+
+```powershell
+dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
+  --map ExampleApp.map --include-symbol 'ExampleApp::ComputeValue' `
+  --only virtualization.coverage
+```
+
+`--only virtualization.coverage` enables both required VM settings. Explicit
+`--set` and per-function rules must enable `virtualization.per-build-isa` and
+`virtualization.coverage` together. All presets keep these native-body transforms
+and packing off until explicitly selected.
+
+Light `packaging.packer` compresses only original initialized writable data
+sections, not executable code. It restores their bytes at startup while keeping
+their virtual addresses and page permissions. It rejects TLS, load-configuration,
+resource, complex unwind, and other unsupported loader metadata, and rejects
+sections containing loader-owned data or relocation targets. This is a narrow
+data-packing contract, not a general-purpose full-image packer.
+
+### Import and string boundaries
+
+Light import concealment performs seeded export-name hash lookup and exact
+name verification, with Windows `GetProcAddress` handling final binding and
+forwarded exports. Original import names, descriptors, and IAT bindings remain
+intact for loader ownership and unrewritten references. Ordinal/API-set imports
+and unsupported reference forms stay unchanged; Light does not hide the original
+import-name inventory.
+
+String discovery follows decoded address-taking references to terminated printable
+ASCII or BMP UTF-16LE data; surrogate pairs and control characters are not covered.
+Shared references use the least-permissive policy, overlapping
+string ranges are skipped, and loader-owned metadata is excluded. Coverage floors
+are six characters at Light, eight at Balanced, and three at Heavy/Maximum;
+Maximum additionally permits initialized writable data. Unsupported metadata,
+shared section pages, and CFG images with pre-existing TLS may limit coverage.
+
+String anti-instrumentation checks the decryptor's instruction range and its
+record table before using them. It detects modifications to those checked bytes;
+it is not a general debugger detector or a claim of resistance to every form of
+instrumentation. Decryption temporarily changes page permissions and restores
+their previous values. Explicit silent taint binds startup decryption keys to the
+shared session state, after startup detections have been processed. This does not
+re-encrypt strings already materialized in memory; they remain plaintext after
+startup decryption.
+
+When a response is selected, detections raised by the string checks are consumed
+before the original entry point runs. Code integrity measurements cover both the
+original function entries and relocated protected bodies, including VM bytecode.
 
 Every successful build writes a private `<output-name>.rmap.json` sidecar by
 default. It records original/protected RVAs, function identity, hashes, and the
 effective per-function settings for crash-symbolication and build telemetry.
+Relocated functions additionally record the emitted body's address, size, and
+owning transformation; the original address and size remain available.
 Keep this file with private build artifacts, not beside the distributed application.
 Use `--symbol-map <file>` to choose its location or `--no-symbol-map` to opt out.
 
@@ -169,16 +236,10 @@ startup work is routed through a newly registered guarded entry target so the
 original TLS metadata remains intact. `rampart inspect` reports the detected
 compatibility surface.
 
-Before a release, maintainers run a separate internal compatibility harness on
-Windows. Its pinned corpus currently includes FFmpeg, SQLite, 7-Zip, curl, Lua,
-Git for Windows, SDL, and VLC. It compares exit codes and output from
-the original and protected programs, and records hashes, output growth, and
-median startup time across repeated runs.
-
-The harness, downloaded programs, and result history are internal release
-evidence and are deliberately excluded from this public repository. The commands
-above are the complete test procedure available to contributors from this
-checkout; the external corpus is not part of `dotnet test`.
+Validate a protected copy against the original application before distribution.
+Check startup, representative workloads, plug-in loading, crash reporting, and
+signing workflows, along with output size and runtime overhead. Compatibility
+depends on the input binary and the selected protections.
 
 ## Design principles
 

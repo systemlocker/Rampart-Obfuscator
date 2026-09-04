@@ -99,13 +99,36 @@ public sealed class FunctionPolicy
     public ProtectionLevel MaximumLevel(string knobId, IEnumerable<FunctionDescriptor> functions) =>
         functions.Select(function => Level(knobId, function)).DefaultIfEmpty(ProtectionLevel.Off).Max();
 
+    /// <summary>Native body replacement requires an explicit function boundary
+    /// selection in addition to an enabled knob. Merely increasing a global
+    /// profile must not opt every discoverable leaf function into rewriting.</summary>
+    public bool HasExplicitSelection(string knobId, FunctionDescriptor function)
+    {
+        if (!IsSelected(function) || Level(knobId, function) == ProtectionLevel.Off)
+            return false;
+        if (_settings.IncludeSymbols.Count > 0 || _settings.IncludeRvaRanges.Count > 0)
+            return true;
+
+        bool explicitlyEnabled = false;
+        foreach (ProtectionRule rule in _settings.Rules.Where(rule => Matches(rule, function)))
+        {
+            // A later preset replaces the earlier per-knob choice. Native body
+            // replacement stays opt-in in every preset, including Nuclear.
+            if (rule.Preset is not null)
+                explicitlyEnabled = false;
+            if (rule.Knobs.TryGetValue(knobId, out ProtectionLevel level))
+                explicitlyEnabled = level != ProtectionLevel.Off;
+        }
+        return explicitlyEnabled;
+    }
+
     public IReadOnlyDictionary<string, ProtectionLevel> EffectiveLevels(FunctionDescriptor function) =>
         ProtectionCapabilities.FunctionScopedKnobs
             .Select(id => (Id: id, Level: Level(id, function)))
             .Where(item => item.Level != ProtectionLevel.Off)
             .ToDictionary(item => item.Id, item => item.Level, StringComparer.Ordinal);
 
-    private static bool Matches(ProtectionRule rule, FunctionDescriptor function)
+    public static bool Matches(ProtectionRule rule, FunctionDescriptor function)
     {
         if (rule.StartRva is uint start && rule.EndRva is uint end && !Overlaps(function, start, end))
             return false;

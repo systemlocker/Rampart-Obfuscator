@@ -9,6 +9,9 @@ public static class ProtectionSelection
     private static readonly Dictionary<string, string[]> Dependencies = new(StringComparer.Ordinal)
     {
         ["packaging.import-concealment"] = ["packaging.ep-confusion"],
+        ["packaging.packer"] = ["packaging.ep-confusion"],
+        ["virtualization.per-build-isa"] = ["virtualization.coverage"],
+        ["virtualization.coverage"] = ["virtualization.per-build-isa"],
         ["strings.encryption"] = ["packaging.ep-confusion"],
         ["strings.anti-instrumentation"] = ["strings.encryption"],
         ["strings.coverage"] = ["strings.encryption"],
@@ -48,18 +51,19 @@ public static class ProtectionSelection
         if (requested.Length == 0)
             throw new ArgumentException("At least one knob id is required for an only-selection.");
 
-        // Planned knobs already resolve to Off through the capability ceiling;
-        // avoid bloating payload previews with redundant roadmap entries.
+        // Unsupported compatibility identifiers already resolve to Off; omit
+        // redundant entries from newly generated configuration payloads.
         foreach (var knob in catalog.All.Where(knob => ProtectionCapabilities.IsReady(knob.Id)))
             settings.Knobs[knob.Id] = ProtectionLevel.Off;
 
+        var visited = new HashSet<string>(StringComparer.Ordinal);
         foreach (string id in requested)
-            EnableWithDependencies(settings, catalog, id);
+            EnableWithDependencies(settings, catalog, id, visited);
     }
 
     /// <summary>
     /// Sets every ready knob in a group to the requested level, clamped to each
-    /// emitter's verified ceiling. Planned knobs remain off.
+    /// emitter's verified ceiling. Unsupported options remain off.
     /// </summary>
     public static void ApplyGroupLevel(
         ProtectionSettings settings,
@@ -98,14 +102,19 @@ public static class ProtectionSelection
     private static void EnableWithDependencies(
         ProtectionSettings settings,
         KnobCatalog catalog,
-        string id)
+        string id,
+        HashSet<string> visited)
     {
+        // Some capabilities form a required pair (the VM and its coverage
+        // selector). Visit each once so either name can enable the whole pair.
+        if (!visited.Add(id))
+            return;
         var knob = catalog.Get(id);
         var ceiling = ProtectionCapabilities.MaxReadyLevel(id);
         if (ceiling == ProtectionLevel.Off)
         {
             throw new NotSupportedException(
-                $"Protection knob '{id}' is planned but does not have a ready emitter yet.");
+                $"Protection knob '{id}' is not supported. Run `rampart knobs` to see supported protections.");
         }
 
         var selectedLevel = ProtectionCapabilities.ClampToReady(
@@ -119,6 +128,6 @@ public static class ProtectionSelection
             return;
 
         foreach (string dependency in dependencies)
-            EnableWithDependencies(settings, catalog, dependency);
+            EnableWithDependencies(settings, catalog, dependency, visited);
     }
 }

@@ -32,6 +32,8 @@ public sealed class RuntimeHardeningPass
     private uint _monitorRva;
     private bool _hasMonitor;
     private bool _postPhaseComplete;
+    private uint _postStringResponseRva;
+    private bool _postStringResponseRegistered;
 
     /// <summary>Applies image metadata, emits response records, and builds the
     /// runtime monitor. Call after code/string/import rewriting and immediately
@@ -167,6 +169,9 @@ public sealed class RuntimeHardeningPass
             taintConstant);
         _hasMonitor = true;
         ctx.RegisterInit(_monitorRva, "runtime hardening and integrity monitor");
+        if (responseProbe && ctx.MaximumFunctionLevel("strings.encryption") != ProtectionLevel.Off)
+            _postStringResponseRva = EmitPostStringResponse(ctx, state!, silentTaint,
+                taintConstant, customMessage, toolResponse, iat);
         if (dacl)
             ctx.Log.Add(new(DaclHardening, "emitted process DACL policy denying create-thread and VM-write opens outside SYSTEM"));
         if (dynamicCode)
@@ -185,6 +190,50 @@ public sealed class RuntimeHardeningPass
             ctx.Log.Add(new(ToolResponse, "bound shared detection flags to a clean ExitProcess response"));
         ctx.Log.Add(new("runtime-hardening",
             $"emitted monitor at RVA {_monitorRva:X8}: {codeRanges.Count} immutable code ranges, {iatSlots.Length} IAT slots, {sentinels.Length} sentinels"));
+    }
+
+    /// <summary>Consumes detections raised by string integrity checks before
+    /// the original entry point. The earlier monitor still supplies pre-decryption
+    /// taint; this second consumer does not repeat process-policy side effects.</summary>
+    public void RegisterAfterStringInitializers(BuildContext ctx)
+    {
+        if (!ReferenceEquals(ctx, _context) || _postPhaseComplete)
+            throw new InvalidOperationException("Register string responses after the pre-entry phase and before entry-point installation.");
+        if (_postStringResponseRegistered)
+            throw new InvalidOperationException("Post-string response consumer was already registered.");
+        _postStringResponseRegistered = true;
+        if (_postStringResponseRva != 0)
+            ctx.RegisterInit(_postStringResponseRva, "post-string detection response");
+    }
+
+    private static uint EmitPostStringResponse(BuildContext ctx,
+        RuntimeDetectionStateLayout state, bool silentTaint, ulong taintConstant,
+        bool customMessage, bool toolResponse, IReadOnlyDictionary<string, uint> iat)
+    {
+        Asm Build(uint selfRva)
+        {
+            var a = new Asm();
+            // Three saves align calls; reserve a separate Windows x64 home area.
+            a.PushR(Reg.Rbx).PushR(Reg.R13).PushR(Reg.R15).SubRi(Reg.Rsp, 0x20);
+            a.LoadRuntimeBase(Reg.R15, selfRva);
+            a.MovRi(Reg.R13, state.Rva).AddRr(Reg.R13, Reg.R15);
+            EmitSharedResponseConsumer(a, silentTaint, taintConstant, customMessage, toolResponse, iat);
+            a.AddRi(Reg.Rsp, 0x20).PopR(Reg.R15).PopR(Reg.R13).PopR(Reg.Rbx).Ret();
+            if (customMessage)
+            {
+                string message = ctx.Settings.CustomMessage ?? "Application integrity check failed.";
+                a.Label("response_message").Db(Encoding.UTF8.GetBytes(message + "\0"));
+            }
+            return a;
+        }
+
+        int size = Build(0).Assemble().Length;
+        uint rva = ctx.Alloc(size, 16);
+        byte[] code = Build(rva).Assemble();
+        if (code.Length != size)
+            throw new InvalidOperationException("Post-string response size shifted between layout passes.");
+        ctx.WriteStub(rva, code);
+        return rva;
     }
 
     /// <summary>Installs the emitted monitor as the first TLS callback. Call
@@ -527,27 +576,63 @@ public sealed class RuntimeHardeningPass
         uint[] relocations = Relocations.Enumerate(ctx.Pe)
             .Where(entry => entry.Type == Relocations.TypeAbsolute)
             .Select(entry => entry.Rva)
+            // New absolute slots have not reached the rebuilt relocation table
+            // yet. Measuring their preferred VAs would report tampering on ASLR.
+            .Concat(ctx.RelocSlots)
+            .Distinct()
             .Order()
             .ToArray();
-        var ranges = new List<CodeRange>();
+        var requested = new List<CodeRange>();
         foreach (FunctionDescriptor function in ctx.Functions.OrderBy(item => item.BeginRva))
         {
-            PeImage.Section? section = ctx.Pe.SectionFromRva(function.BeginRva);
-            if (section is null || !section.IsExecutable || !ctx.Pe.TryRvaToOffset(function.BeginRva, out int offset))
-                continue;
-            uint rawEnd = section.VirtualAddress + section.SizeOfRawData;
-            uint end = Math.Min(function.EndRva, rawEnd);
-            uint cursor = function.BeginRva;
-            foreach (uint relocation in relocations.Where(rva => rva < end && rva + 8 > cursor))
-            {
-                if (relocation > cursor)
-                    ranges.Add(new CodeRange(cursor, relocation - cursor));
-                cursor = Math.Min(end, relocation + 8);
-            }
-            if (cursor < end)
-                ranges.Add(new CodeRange(cursor, end - cursor));
+            AddRange(function.BeginRva, function.Size);
+            // The original entry still matters, but it is now a trampoline.
+            // Cover the executing body as well, including immutable VM bytecode.
+            if (ctx.FunctionTransformations.TryGetValue(function.BeginRva, out var transformed))
+                AddRange(transformed.ProtectedRva, transformed.ProtectedSize);
         }
-        return ranges.Where(range => range.Length != 0).ToList();
+
+        // Merge overlap before subtracting fixups so each byte is measured once.
+        // The scan remains linear after sorting; generated coverage is limited
+        // to claimed bodies, never the entire reserved runtime code section.
+        var merged = new List<CodeRange>();
+        foreach (CodeRange range in requested.OrderBy(range => range.Rva))
+        {
+            if (merged.Count == 0 || (ulong)merged[^1].Rva + merged[^1].Length < range.Rva)
+                merged.Add(range);
+            else
+            {
+                CodeRange previous = merged[^1];
+                ulong end = Math.Max((ulong)previous.Rva + previous.Length, (ulong)range.Rva + range.Length);
+                merged[^1] = previous with { Length = checked((uint)(end - previous.Rva)) };
+            }
+        }
+        var ranges = new List<CodeRange>();
+        int fixupIndex = 0;
+        foreach (CodeRange range in merged)
+        {
+            ulong cursor = range.Rva, end = cursor + range.Length;
+            while (fixupIndex < relocations.Length && (ulong)relocations[fixupIndex] + 8 <= cursor)
+                fixupIndex++;
+            int index = fixupIndex;
+            while (index < relocations.Length && relocations[index] < end)
+            {
+                ulong relocation = relocations[index++];
+                if (relocation > cursor)
+                    ranges.Add(new CodeRange((uint)cursor, (uint)(relocation - cursor)));
+                cursor = Math.Max(cursor, Math.Min(end, relocation + 8));
+            }
+            if (cursor < end) ranges.Add(new CodeRange((uint)cursor, (uint)(end - cursor)));
+        }
+        return ranges;
+
+        void AddRange(uint start, uint length)
+        {
+            PeImage.Section? section = ctx.Pe.SectionFromRva(start);
+            if (section is null || !section.IsExecutable || !ctx.Pe.TryRvaToOffset(start, out _)) return;
+            ulong end = Math.Min((ulong)start + length, (ulong)section.VirtualAddress + section.SizeOfRawData);
+            if (end > start) requested.Add(new CodeRange(start, checked((uint)(end - start))));
+        }
     }
 
     private static ulong HashCodeRanges(PeImage pe, IEnumerable<CodeRange> ranges, ulong basis)

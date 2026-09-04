@@ -13,16 +13,15 @@ public static class Presets
     public static readonly string[] All = [Light, Balanced, Heavy, Maximum, Nuclear];
 
     /// <summary>Default level a preset assigns to a knob when the user has not
-    /// overridden it. Everything earns its level: cheap static transforms ride
-    /// high everywhere, expensive transforms (VM, nanomites) only turn up late.</summary>
+    /// overridden it. Runtime behavior changes and restricted transforms require
+    /// explicit selection; capability ceilings are applied by settings resolution.</summary>
     public static ProtectionLevel DefaultLevel(string preset, KnobDef knob) => preset switch
     {
         Light => PresetMap(knob.Group, knob.Id, 1),
         Balanced => PresetMap(knob.Group, knob.Id, 2),
         Heavy => PresetMap(knob.Group, knob.Id, 3),
         Maximum => PresetMap(knob.Group, knob.Id, 4),
-        // Nuclear is Maximum plus the "deliberate use only" options the site
-        // gates behind a second confirmation — here gated by the preset choice.
+        // The explicit runtime profile still respects supported level ceilings.
         Nuclear => NuclearMap(knob.Id),
         _ => throw new ArgumentException($"Unknown preset '{preset}'. Valid: {string.Join(", ", All)}"),
     };
@@ -33,14 +32,17 @@ public static class Presets
         // knobs whose cost is compatibility (not just speed) stay low until asked for.
         var clamp = id switch
         {
-            // Nanomites and friends are "deliberate use only" even on Maximum —
-            // some tools flag their patterns, exactly as the reference feature
-            // list warns. They only light up on the nuclear preset or by name.
+            // The first native-body and packing emitters accept deliberately
+            // narrow input contracts. A preset cannot establish those contracts.
+            "packaging.packer" or "code-transformation.flattening"
+                or "virtualization.per-build-isa" or "virtualization.coverage"
+                => ProtectionLevel.Off,
+            // Keep runtime-sensitive and disabled compatibility options out of
+            // general-purpose presets.
             "nuclear.nanomites" or "nuclear.exception-flow" or "nuclear.memory-ambush"
                 or "nuclear.injection-hunter" => ProtectionLevel.Off,
-            // Self-debugging holds the debug port; too surprising for a default.
+            // Legacy preset values remain inert under the capability ceiling.
             "integrity.self-debug-port" => tier >= 4 ? ProtectionLevel.Light : ProtectionLevel.Off,
-            // Loader interposition can refuse legitimate plug-ins in DLL-heavy apps.
             "integrity.loader-hijack" => tier >= 4 ? ProtectionLevel.Light : ProtectionLevel.Off,
             // Runtime environment probes and process-policy changes need an
             // explicit compatibility decision. `--only` still enables their
@@ -64,5 +66,11 @@ public static class Presets
         return clamp;
     }
 
-    private static ProtectionLevel NuclearMap(string id) => ProtectionLevel.Maximum;
+    private static ProtectionLevel NuclearMap(string id) => id switch
+    {
+        "packaging.packer" or "code-transformation.flattening"
+            or "virtualization.per-build-isa" or "virtualization.coverage"
+            => ProtectionLevel.Off,
+        _ => ProtectionLevel.Maximum,
+    };
 }

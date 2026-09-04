@@ -19,6 +19,10 @@ public sealed class ProtectedSymbolMapEntry
     public required uint OriginalRva { get; init; }
     public required uint ProtectedRva { get; init; }
     public required uint Size { get; init; }
+    /// <summary>Length of the emitted body when a transform moved this function.
+    /// Size retains the original range length for source-side lookups.</summary>
+    public uint? ProtectedSize { get; init; }
+    public string? Transformation { get; init; }
     public string? Namespace { get; init; }
     public string? Module { get; init; }
     public string? Section { get; init; }

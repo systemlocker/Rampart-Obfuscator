@@ -1,9 +1,9 @@
 namespace Rampart.Config;
 
 /// <summary>
-/// Tracks the knobs whose emitters are complete enough to use in a build. The
-/// catalog is also Rampart's public roadmap, so catalog membership alone must
-/// never be treated as proof that a protection is already implemented.
+/// Defines the supported level ceiling for each protection. Catalog membership
+/// alone does not establish support: disabled identifiers can remain recognized
+/// for compatibility with existing configuration files.
 /// </summary>
 public static class ProtectionCapabilities
 {
@@ -13,8 +13,12 @@ public static class ProtectionCapabilities
         ["packaging.import-concealment"] = ProtectionLevel.Light,
         ["packaging.header-disguise"] = ProtectionLevel.Balanced,
         ["packaging.ep-confusion"] = ProtectionLevel.Light,
+        ["packaging.packer"] = ProtectionLevel.Light,
+        ["code-transformation.flattening"] = ProtectionLevel.Light,
+        ["virtualization.per-build-isa"] = ProtectionLevel.Light,
+        ["virtualization.coverage"] = ProtectionLevel.Light,
         ["code-transformation.junk-insertion"] = ProtectionLevel.Maximum,
-        ["code-transformation.mba-constants"] = ProtectionLevel.Light,
+        ["code-transformation.mba-constants"] = ProtectionLevel.Balanced,
         ["code-transformation.per-build-mutation"] = ProtectionLevel.Light,
         ["strings.encryption"] = ProtectionLevel.Balanced,
         ["strings.anti-instrumentation"] = ProtectionLevel.Light,
@@ -66,11 +70,15 @@ public static class ProtectionCapabilities
         "strings.encryption",
         "strings.anti-instrumentation",
         "strings.coverage",
+        "code-transformation.flattening",
+        "code-transformation.mba-constants",
+        "virtualization.per-build-isa",
+        "virtualization.coverage",
     };
 
     /// <summary>
-    /// Rejects misspelled and planned-only explicit overrides. Presets resolve
-    /// planned knobs to Off, but an explicit opt-in must fail loudly instead of
+    /// Rejects misspelled and unsupported explicit overrides. Presets resolve
+    /// unavailable options to Off, but an explicit opt-in must fail instead of
     /// producing a binary that only claims to contain the requested protection.
     /// </summary>
     public static void Validate(ProtectionSettings settings, KnobCatalog catalog)
@@ -87,9 +95,9 @@ public static class ProtectionCapabilities
             {
                 throw new NotSupportedException(
                     maxReady == ProtectionLevel.Off
-                        ? $"Protection knob '{id}' is planned but does not have a ready emitter yet. " +
-                          "Run `rampart knobs` to see ready protections."
-                        : $"Protection knob '{id}' is ready through {maxReady}, but {level} was requested. " +
+                        ? $"Protection knob '{id}' is not supported. " +
+                          "Run `rampart knobs` to see supported protections."
+                        : $"Protection knob '{id}' is supported through {maxReady}, but {level} was requested. " +
                           "Run `rampart explain` to see which levels are available.");
             }
         }
@@ -140,6 +148,12 @@ public static class ProtectionCapabilities
             ProtectionLevel ruleStrings = RuleLevel("strings.encryption");
             ProtectionLevel ruleStringInstrumentation = RuleLevel("strings.anti-instrumentation");
             ProtectionLevel ruleStringCoverage = RuleLevel("strings.coverage");
+            if ((RuleLevel("virtualization.per-build-isa") == ProtectionLevel.Off)
+                != (RuleLevel("virtualization.coverage") == ProtectionLevel.Off))
+            {
+                throw new ArgumentException(
+                    "A function rule must enable virtualization.per-build-isa and virtualization.coverage together.");
+            }
             if (settings.LevelOf(catalog.Get("packaging.ep-confusion")) == ProtectionLevel.Off
                 && (ruleImports != ProtectionLevel.Off || ruleStrings != ProtectionLevel.Off))
             {
@@ -159,6 +173,13 @@ public static class ProtectionCapabilities
         var strings = settings.LevelOf(catalog.Get("strings.encryption"));
         var stringInstrumentation = settings.LevelOf(catalog.Get("strings.anti-instrumentation"));
         var stringCoverage = settings.LevelOf(catalog.Get("strings.coverage"));
+        var packer = settings.LevelOf(catalog.Get("packaging.packer"));
+        if ((settings.LevelOf(catalog.Get("virtualization.per-build-isa")) == ProtectionLevel.Off)
+            != (settings.LevelOf(catalog.Get("virtualization.coverage")) == ProtectionLevel.Off))
+        {
+            throw new ArgumentException(
+                "virtualization.per-build-isa and virtualization.coverage must be enabled together.");
+        }
         string[] startupKnobs =
         [
             "anti-debug.channel-sweep",
@@ -187,7 +208,8 @@ public static class ProtectionCapabilities
             settings.LevelOf(catalog.Get(id)) != ProtectionLevel.Off);
 
         if (entryPoint == ProtectionLevel.Off
-            && (imports != ProtectionLevel.Off || strings != ProtectionLevel.Off || runtimeGuardEnabled))
+            && (imports != ProtectionLevel.Off || strings != ProtectionLevel.Off
+                || packer != ProtectionLevel.Off || runtimeGuardEnabled))
         {
             throw new ArgumentException(
                 "packaging.ep-confusion must be enabled when a selected protection registers a startup routine.");

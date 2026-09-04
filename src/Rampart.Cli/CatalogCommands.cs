@@ -51,12 +51,11 @@ internal static class KnobsCommand
     {
         if (args.Contains("--help", StringComparer.Ordinal))
         {
-            Console.WriteLine("usage: rampart knobs [--group <name>] [--ready] [--json]");
+            Console.WriteLine("usage: rampart knobs [--group <name>] [--json]");
             return 0;
         }
 
         string? group = null;
-        bool readyOnly = false;
         bool json = false;
         for (int i = 0; i < args.Length; i++)
         {
@@ -66,7 +65,7 @@ internal static class KnobsCommand
                     group = SettingsArguments.RequireValue(args, ref i, args[i]);
                     break;
                 case "--ready":
-                    readyOnly = true;
+                    // Retain the earlier filter flag as an alias for the default.
                     break;
                 case "--json":
                     json = true;
@@ -80,17 +79,14 @@ internal static class KnobsCommand
         if (group is not null && !KnobGroups.All.Contains(group, StringComparer.Ordinal))
             throw new ArgumentException($"Unknown group '{group}'. Valid: {string.Join(", ", KnobGroups.All)}.");
         IEnumerable<KnobDef> query = group is null ? catalog.All : catalog.InGroup(group);
-        if (readyOnly)
-            query = query.Where(k => ProtectionCapabilities.IsReady(k.Id));
+        query = query.Where(k => ProtectionCapabilities.IsReady(k.Id));
         var knobs = query.Select(k => new
         {
             k.Id,
             k.Group,
             k.Name,
             k.Summary,
-            Status = ProtectionCapabilities.IsReady(k.Id)
-                ? $"ready through {ProtectionCapabilities.MaxReadyLevel(k.Id).DisplayName()}"
-                : "planned",
+            Status = $"supported through {ProtectionCapabilities.MaxReadyLevel(k.Id).DisplayName()}",
             k.Tags,
             k.Points,
         }).ToList();
@@ -123,17 +119,16 @@ internal static class ExplainCommand
 
         var knob = KnobCatalog.Load().Get(args[0]);
         var maxReady = ProtectionCapabilities.MaxReadyLevel(knob.Id);
-        string status = maxReady == ProtectionLevel.Off
-            ? "planned"
-            : $"ready through {maxReady.DisplayName()}";
+        if (maxReady == ProtectionLevel.Off)
+            throw new NotSupportedException($"Protection option '{knob.Id}' is not supported. Run `rampart knobs` for supported options.");
+        string status = $"supported through {maxReady.DisplayName()}";
         Console.WriteLine($"{knob.Name} ({knob.Id})");
         Console.WriteLine($"status: {status}");
         Console.WriteLine(knob.Summary);
         Console.WriteLine();
-        for (var level = ProtectionLevel.Light; level <= ProtectionLevel.Maximum; level++)
+        for (var level = ProtectionLevel.Light; level <= maxReady; level++)
         {
-            string availability = level <= maxReady ? "ready" : "planned";
-            Console.WriteLine($"{level.DisplayName(),-9} {knob.PointsAt(level),2} point(s)  [{availability}] {knob.LevelText(level)}");
+            Console.WriteLine($"{level.DisplayName(),-9} {knob.PointsAt(level),2} point(s)  {knob.LevelText(level)}");
         }
         return 0;
     }

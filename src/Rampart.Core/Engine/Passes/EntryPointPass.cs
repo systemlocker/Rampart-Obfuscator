@@ -49,7 +49,12 @@ public sealed class EntryPointPass
         var g = new Asm();
         uint gemRva = ctx.Alloc(64, 16);
         g.Label("gem");
+        // The entry point arrives with RSP eight bytes off alignment, just like
+        // a normal Windows x64 function. Supply both alignment and the callee's
+        // 32-byte home area, including when CFG routes initialization here.
+        g.SubRi(Reg.Rsp, 0x28);
         g.CallRva(gemRva, dispatcherRva);
+        g.AddRi(Reg.Rsp, 0x28);
         // Overlap pair: entering at +0 vs +1 decodes differently (the EB skips
         // into the middle of the next instruction).
         g.Db(0xEB, 0x10);                       // jmp +0x10 → over the confusion field
@@ -100,7 +105,9 @@ public sealed class EntryPointPass
         a.PushR(Reg.Rdi);
         a.PushR(Reg.Rsi);
         a.PushR(Reg.R12);
-        a.SubRi(Reg.Rsp, 8);            // 5 pushes/sub total keeps calls 16-aligned
+        // Four saved registers leave the entry alignment unchanged. Initializers
+        // may spill arguments into their caller-provided 32-byte home area.
+        a.SubRi(Reg.Rsp, 0x28);
 
         // Guard: first invocation runs the chain, later thread starts are no-ops.
         a.MovRip(Reg.Rax, "guard");     // mov rax, [rip+guard]
@@ -124,7 +131,7 @@ public sealed class EntryPointPass
         a.Jmp("next");
 
         a.Label("done");
-        a.AddRi(Reg.Rsp, 8);
+        a.AddRi(Reg.Rsp, 0x28);
         a.PopR(Reg.R12);
         a.PopR(Reg.Rsi);
         a.PopR(Reg.Rdi);

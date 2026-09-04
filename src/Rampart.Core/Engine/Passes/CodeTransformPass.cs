@@ -1,27 +1,26 @@
+using System.Buffers.Binary;
+using Rampart.Config;
+using Rampart.ControlFlow;
+using Rampart.NativeTransforms;
 using Rampart.Pe;
 
 namespace Rampart.Engine.Passes;
 
-/// <summary>Code transformation: junk + dead-code insertion, MBA constants,
-/// per-build mutation. v0.1 applies the transforms that provably preserve
-/// semantics without a full recompiler:
-///   - decoy code fills every inter-function alignment gap (valid instruction
-///     streams, never executed, signature-breaking noise);
-///   - per-build mutation: all decoy streams, keys, and layouts derive from the
-///     build seed — no two builds share bytes;
-///   - MBA rewriting applies to constants the protector itself emits (see
-///     Asm.MovRiMba) — user-code MBA needs the verified lifter and lands with
-///     the virtualization work.</summary>
+/// <summary>Inserts padding noise and rebuilds explicitly selected native leaf
+/// bodies with flag-preserving junk and verified target-constant splitting.</summary>
 public sealed class CodeTransformPass
 {
     public void Run(BuildContext ctx)
     {
+        TransformNativeBodies(ctx);
         var junkLevel = ctx.MaximumFunctionLevel("code-transformation.junk-insertion");
         if (junkLevel != Config.ProtectionLevel.Off)
         {
             int changed = FillPaddingWithDecoys(ctx, junkLevel);
             if (changed > 0)
-                ctx.MarkApplied("code-transformation.junk-insertion", junkLevel);
+                // Padding cannot substantiate a claim about executed body noise.
+                // Only a successfully rebuilt native function raises this ceiling.
+                ctx.MarkApplied("code-transformation.junk-insertion", ProtectionLevel.Light);
         }
 
         if (ctx.MaximumFunctionLevel("code-transformation.per-build-mutation") != Config.ProtectionLevel.Off)
@@ -29,6 +28,69 @@ public sealed class CodeTransformPass
 
         if (ctx.MaximumFunctionLevel("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
             ctx.Log.Add(new("mba", "runtime-stub constants use per-build XOR-split identities"));
+    }
+
+    private static void TransformNativeBodies(BuildContext ctx)
+    {
+        const string junkId = "code-transformation.junk-insertion", mbaId = "code-transformation.mba-constants";
+        foreach (FunctionDescriptor function in ctx.Functions.OrderBy(function => function.BeginRva))
+        {
+            ProtectionLevel junk = ctx.LevelFor(junkId, function), mba = ctx.LevelFor(mbaId, function);
+            bool nativeJunk = junk >= ProtectionLevel.Balanced;
+            bool nativeMba = mba >= ProtectionLevel.Balanced;
+            if (!nativeJunk && !nativeMba)
+                continue;
+            nativeJunk &= ctx.FunctionPolicy.HasExplicitSelection(junkId, function);
+            nativeMba &= ctx.FunctionPolicy.HasExplicitSelection(mbaId, function);
+            if (!nativeJunk && !nativeMba)
+            {
+                Skip("native body rewriting requires explicit function selection");
+                continue;
+            }
+            if (nativeMba && mba != ProtectionLevel.Balanced)
+                throw new InvalidOperationException("Target-constant splitting supports only Balanced.");
+            if (ctx.IsFunctionClaimed(function))
+            {
+                Skip("function is owned by an earlier transformation");
+                continue;
+            }
+            if (!LeafFunctionEligibility.TryValidate(ctx, function, out string reason))
+            {
+                Skip(reason);
+                continue;
+            }
+            int density = nativeJunk ? junk switch
+            {
+                ProtectionLevel.Balanced => 1,
+                ProtectionLevel.Heavy => 2,
+                _ => 3,
+            } : 0;
+            byte[] original = ctx.Pe.ReadRva(function.BeginRva, checked((int)function.Size));
+            if (!NativeLeafCompiler.TryCompile(original, ctx.Rng, new NativeTransformOptions(density, nativeMba),
+                    out CompiledNativeLeaf? compiled, out reason))
+            {
+                Skip(reason);
+                continue;
+            }
+            uint target = ctx.Alloc(compiled!.Code.Length, 16);
+            long displacement = (long)target - function.BeginRva - 5;
+            if (displacement is < int.MinValue or > int.MaxValue)
+                throw new InvalidOperationException("Rewritten native code is outside the rel32 range.");
+            if (!ctx.TryClaimFunction(function, "native-code", target, (uint)compiled.Code.Length))
+                throw new InvalidOperationException("Native function ownership changed during emission.");
+            ctx.WriteStub(target, compiled.Code);
+            byte[] entry = new byte[5];
+            entry[0] = 0xE9;
+            BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(1), (int)displacement);
+            ctx.Pe.WriteRva(function.BeginRva, entry);
+            if (compiled.JunkSites != 0) ctx.MarkApplied(junkId, junk);
+            if (compiled.SplitConstants != 0) ctx.MarkApplied(mbaId, ProtectionLevel.Balanced);
+            ctx.Log.Add(new("native-code", $"rewrote {function.Name} at RVA {function.BeginRva:X8}: " +
+                $"{compiled.JunkSites} in-body junk sites, {compiled.SplitConstants} target constants split, " +
+                $"{compiled.FlagLiveConstants} MOV constants retained for live flags; {compiled.Code.Length} bytes"));
+
+            void Skip(string detail) => ctx.Log.Add(new("native-code", $"skipped {function.Name} at RVA {function.BeginRva:X8}: {detail}"));
+        }
     }
 
     /// <summary>Finds alignment padding between .pdata-known functions (the CC/90
@@ -105,12 +167,11 @@ public sealed class CodeTransformPass
     /// <summary>Generates a valid, never-executed instruction stream into the
     /// gap: flag-preserving computations on dead registers, fake prologues,
     /// short jumps that stay inside the gap. Every byte derives from the build
-    /// RNG — the same seed reproduces it, any other seed never repeats it.</summary>
+    /// RNG — the same seed reproduces the selected layout.</summary>
     private static void EmitDecoyStream(Span<byte> gap, Random rng, int density)
     {
-        // Fake prologue fragments IDA-style tools recognize as function starts —
-        // the "autoanalysis bomb" in miniature. Kept small here; the dedicated
-        // analysis-crasher pass scales this to tens of thousands.
+        // These fragments stay in verified inter-function padding. Native body
+        // junk uses a separate emitter with the stricter executed-code contract.
         int pos = 0;
         while (pos < gap.Length)
         {

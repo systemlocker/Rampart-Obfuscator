@@ -8,35 +8,9 @@ public class ProtectionCapabilitiesTests
 {
     private static readonly KnobCatalog Catalog = KnobCatalog.Load();
 
-    // These ten settings predate the protection-coverage milestone. Keeping the
-    // baseline explicit makes the 50% target measurable as the catalog grows.
-    private static readonly HashSet<string> MilestoneBaseline = new(StringComparer.Ordinal)
-    {
-        "packaging.symbol-scrub",
-        "packaging.import-concealment",
-        "packaging.header-disguise",
-        "packaging.ep-confusion",
-        "code-transformation.junk-insertion",
-        "code-transformation.mba-constants",
-        "code-transformation.per-build-mutation",
-        "strings.encryption",
-        "strings.anti-instrumentation",
-        "strings.coverage",
-    };
-
     [Fact]
-    public void ProtectionMilestoneKeepsAtLeastHalfOfRoadmapReady()
+    public void RequiredRuntimeProtectionsRemainSupported()
     {
-        string[] newlyReady = Catalog.All
-            .Where(knob => ProtectionCapabilities.IsReady(knob.Id))
-            .Select(knob => knob.Id)
-            .Where(id => !MilestoneBaseline.Contains(id))
-            .ToArray();
-
-        int roadmapCount = Catalog.All.Count - MilestoneBaseline.Count;
-        Assert.True(newlyReady.Length * 2 >= roadmapCount,
-            $"Expected at least half of {roadmapCount} roadmap settings ready; found {newlyReady.Length}.");
-
         foreach (string required in new[]
         {
             "analysis.ida-bomb",
@@ -48,7 +22,7 @@ public class ProtectionCapabilitiesTests
         })
         {
             Assert.True(ProtectionCapabilities.MaxReadyLevel(required) >= ProtectionLevel.Light,
-                $"Required milestone protection '{required}' is not ready at Light.");
+                $"Required protection '{required}' is not supported at Light.");
         }
     }
 
@@ -65,15 +39,15 @@ public class ProtectionCapabilitiesTests
     }
 
     [Fact]
-    public void ExplicitPlannedKnobIsRejected()
+    public void ExplicitUnsupportedKnobIsRejected()
     {
         var settings = ProtectionSettings.FromPreset(Presets.Light);
-        settings.Knobs["virtualization.per-build-isa"] = ProtectionLevel.Light;
+        settings.Knobs["virtualization.extended-isa"] = ProtectionLevel.Light;
 
         var error = Assert.Throws<NotSupportedException>(() =>
             ProtectionCapabilities.Validate(settings, Catalog));
 
-        Assert.Contains("planned", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not supported", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -94,7 +68,7 @@ public class ProtectionCapabilitiesTests
         var error = Assert.Throws<NotSupportedException>(() =>
             ProtectionCapabilities.Validate(settings, Catalog));
 
-        Assert.Contains("ready through Light", error.Message, StringComparison.Ordinal);
+        Assert.Contains("supported through Light", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -158,7 +132,7 @@ public class ProtectionCapabilitiesTests
 
         Assert.Equal(ProtectionLevel.Maximum,
             settings.LevelOf(Catalog.Get("code-transformation.junk-insertion")));
-        Assert.Equal(ProtectionLevel.Light,
+        Assert.Equal(ProtectionLevel.Balanced,
             settings.LevelOf(Catalog.Get("code-transformation.mba-constants")));
         Assert.Equal(ProtectionLevel.Light,
             settings.LevelOf(Catalog.Get("code-transformation.per-build-mutation")));

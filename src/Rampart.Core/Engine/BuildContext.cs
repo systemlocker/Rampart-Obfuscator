@@ -10,6 +10,10 @@ namespace Rampart.Engine;
 /// `rampart inspect`, the build history, and the payload preview.</summary>
 public sealed record BuildLogEntry(string Pass, string Detail);
 
+/// <summary>A relocated function body and the transform that owns its original entry.</summary>
+public sealed record FunctionTransformation(
+    uint OriginalRva, uint ProtectedRva, uint ProtectedSize, string Pass);
+
 /// <summary>State shared by every pass for one build. The seed drives all
 /// randomization: same seed ⇒ identical output; different seed ⇒ no shared bytes.</summary>
 public sealed class BuildContext
@@ -21,6 +25,8 @@ public sealed class BuildContext
     public List<BuildLogEntry> Log { get; } = [];
     private readonly Dictionary<string, ProtectionLevel> _applied = new(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, ProtectionLevel> Applied => _applied;
+    private readonly Dictionary<uint, FunctionTransformation> _functionTransformations = [];
+    public IReadOnlyDictionary<uint, FunctionTransformation> FunctionTransformations => _functionTransformations;
 
     /// <summary>Functions from `.pdata`, enriched with optional build symbols.</summary>
     public List<FunctionDescriptor> Functions { get; private set; } = [];
@@ -59,7 +65,9 @@ public sealed class BuildContext
         Symbols = symbols ?? [];
         FunctionPolicy = new FunctionPolicy(settings, catalog);
         // Random() seeds from int; fold the long seed in so both halves matter.
-        Rng = new Random(unchecked((int)(settings.Seed ^ (settings.Seed >> 32)) | 1));
+        // Zero is a valid Random seed. Forcing the low bit would make adjacent
+        // even/odd build seeds identical before any transform could diversify.
+        Rng = new Random(unchecked((int)(settings.Seed ^ (settings.Seed >> 32))));
     }
 
     public ProtectionLevel Level(string knobId) => Settings.LevelOf(Catalog.Get(knobId));
@@ -67,6 +75,22 @@ public sealed class BuildContext
         FunctionPolicy.Level(knobId, function);
     public ProtectionLevel MaximumFunctionLevel(string knobId) =>
         FunctionPolicy.MaximumLevel(knobId, Functions);
+
+    public bool IsFunctionClaimed(FunctionDescriptor function) =>
+        _functionTransformations.ContainsKey(function.BeginRva);
+
+    /// <summary>Claims a function before its entry is patched. A later native
+    /// transform must not decode an earlier transform's entry trampoline as
+    /// original application code.</summary>
+    public bool TryClaimFunction(
+        FunctionDescriptor function, string pass, uint protectedRva, uint protectedSize)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pass);
+        if (protectedSize == 0)
+            throw new ArgumentOutOfRangeException(nameof(protectedSize));
+        return _functionTransformations.TryAdd(function.BeginRva,
+            new FunctionTransformation(function.BeginRva, protectedRva, protectedSize, pass));
+    }
 
     public void MarkApplied(string knobId)
     {
