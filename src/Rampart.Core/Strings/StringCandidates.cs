@@ -8,7 +8,8 @@ using Rampart.X64;
 namespace Rampart.Strings;
 
 internal readonly record struct StringCandidate(uint Rva, int Length, int Characters, int UnitSize,
-    ProtectionLevel Encryption, ProtectionLevel Coverage, ProtectionLevel Integrity);
+    ProtectionLevel Encryption, ProtectionLevel Coverage, ProtectionLevel Integrity,
+    IReadOnlyList<FunctionDescriptor> Owners);
 
 /// <summary>Conservative address-taking discovery, not a scan of arbitrary printable bytes.</summary>
 internal static class StringCandidates
@@ -40,7 +41,8 @@ internal static class StringCandidates
                 var candidate = new StringCandidate(target, bytes, chars, unit,
                     context.LevelFor("strings.encryption", function),
                     context.LevelFor("strings.coverage", function),
-                    context.LevelFor("strings.anti-instrumentation", function));
+                    context.LevelFor("strings.anti-instrumentation", function),
+                    [function]);
                 // Balanced intentionally uses a higher floor than Light. Check
                 // each owner's eligibility before merging numeric levels so a
                 // shared Light reference cannot bypass a Balanced owner's floor.
@@ -57,6 +59,8 @@ internal static class StringCandidates
                         Encryption = Min(previous.Encryption, candidate.Encryption),
                         Coverage = Min(previous.Coverage, candidate.Coverage),
                         Integrity = Min(previous.Integrity, candidate.Integrity),
+                        Owners = previous.Owners.Concat(candidate.Owners)
+                            .DistinctBy(owner => owner.BeginRva).ToArray(),
                     };
                 }
                 found[target] = candidate;

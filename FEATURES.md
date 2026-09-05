@@ -12,12 +12,12 @@ and applied-protection report for each output.
 
 | What is protected | Protection | Verified through | What changes |
 | --- | --- | --- | --- |
-| Build provenance and symbol clues | `packaging.symbol-scrub` | Heavy | Removes debug-directory and PDB-path data, the Rich header, section names, COFF symbol remnants, and build timestamps according to level. |
-| PE build identity | `packaging.header-disguise` | Balanced | Replaces genuine timestamp and selected linker metadata with build-seeded decoy values. |
+| Build provenance and symbol clues | `packaging.symbol-scrub` | Maximum | Removes debug/PDB payloads, including file-only payloads, plus Rich data, section names, references, and timestamps by level. Maximum clears validated file-only COFF symbol/string tables while preserving adjacent assets; mapped or malformed COFF payloads are rejected. |
+| PE build identity | `packaging.header-disguise` | Maximum | Heavy adds a consistent linker/image-version profile and export/debug timestamps while preserving loader compatibility and import-binding fields. Maximum computes the checksum over final file bytes. |
 | Imported call references | `packaging.import-concealment` | Light | Routes eligible references through seeded export-name hash lookup with exact collision verification and Windows-managed final binding. Original loader import names and bindings remain intact. |
 | Original entry path | `packaging.ep-confusion` | Light | Routes startup through a generated dispatcher which computes and transfers control to the original entry point. |
 | Native instruction stream | `code-transformation.junk-insertion` | Maximum | Light fills verified padding; higher levels additionally rewrite explicitly selected, verified register-only leaf bodies with increasing in-body noise density. Heavy/Maximum include bounded dead branches. Padding alone reports Light. |
-| Constants in generated/runtime and selected native code | `code-transformation.mba-constants` | Balanced | Light splits generated constants; Balanced additionally reconstructs eligible target immediates through seeded modular arithmetic/boolean identities, preserving live flags. Stub-only work reports Light. |
+| Constants in generated/runtime and selected native code | `code-transformation.mba-constants` | Maximum | Balanced reconstructs eligible target immediates through modular arithmetic/XOR. Heavy nests two layers; Maximum varies three or four layers with arithmetic/XOR/rotation identities. All levels preserve live flags; stub-only work reports Light. |
 | Cross-build binary fingerprints | `code-transformation.per-build-mutation` | Light | Changes generated layout choices, register allocation, keys, and related emitted bytes from the build seed. |
 | Embedded ASCII and UTF-16 strings | `strings.encryption` | Balanced | Encrypts eligible referenced string runs in place and restores them during protected startup. |
 | String materialization sites | `strings.anti-instrumentation` | Light | Checks the decryptor instruction range and record table before use; detected modifications leave the affected strings encrypted and record a shared detection flag. |
@@ -69,14 +69,25 @@ These Light-level settings require explicit selection:
 | Selected native control flow | `code-transformation.flattening` | Rebuilds small, register-only, empty-unwind leaf functions with verified local conditional branches around a seeded state dispatcher. |
 | Selected leaf-function logic | `virtualization.per-build-isa` | Emits a real bytecode interpreter with per-build opcode assignments for a verified straight-line scalar accumulator subset. |
 | VM selection | `virtualization.coverage` | Requires explicit symbol/RVA selection or enabling rules, leaves unsupported functions native with logged reasons, and works together with the per-build ISA setting. |
+| Integer SIMD operations | `virtualization.extended-isa` | Adds initialized XMM0/XMM1 MOVD/MOVQ, MOVDQA, packed dword/qword addition/subtraction, and bitwise operations. No memory, floating-point, string, or atomic instructions. |
+| VM handler implementations | `virtualization.handler-polymorphism` | Selects equivalent arithmetic and register-dataflow implementations per interpreter using the build seed. |
+| Nested virtualized operations | `virtualization.vm-nesting` | Executes outer operations through a disjoint micro-ISA with an independent instruction pointer and composed primitive programs. |
+| Runtime bytecode copies | `virtualization.runtime-rekey` | Moves and re-encodes up to 32 outer instructions between private stack buffers after every instruction, scrubs replaced/returned buffers, and supplies native unwind metadata. Templates stay immutable; masks are not cryptographic encryption. |
+| Conditional branch decisions | `nuclear.nanomites` | Evaluates saved flags at exact owned exception sites in explicitly selected acyclic integer leaf CFGs. |
+| Native control-flow edges | `nuclear.exception-flow` | Routes selected edges through owned exceptions, preserves unrelated exception handling, and falls back to native code if handler registration fails. |
 
 These native-body transforms currently reject load-configuration/CFG images and
 preserve original public entry addresses through direct transfers. Virtualization
-owns overlapping selections before flattening runs. Their private symbol maps
+owns overlapping selections before exception flow and flattening run. Their private symbol maps
 record the relocated body ranges. Packing currently rejects original TLS,
 resources, complex unwind records, and other unsupported loader metadata; ordinary
 imports and relocations must be entirely outside packed data. These restricted
 emitters are off in every preset, including Nuclear.
+
+Exception transforms require the entry dispatcher and a build-wide limit of 1,024
+owned sites. Their first-chance exceptions remain visible to diagnostics tools,
+and their cost suits infrequent paths. VM re-keying adds a described stack frame;
+other VM variants and the exception handler preserve leaf unwinding conventions.
 
 Environment probes, mapped-header changes, process-policy changes, response
 behavior, and background monitors remain explicit opt-ins rather than preset
@@ -106,6 +117,15 @@ Function-level settings currently apply to:
 - `code-transformation.mba-constants`
 - `virtualization.per-build-isa`
 - `virtualization.coverage`
+- `virtualization.extended-isa`
+- `virtualization.handler-polymorphism`
+- `virtualization.vm-nesting`
+- `virtualization.runtime-rekey`
+- `nuclear.nanomites`
+- `nuclear.exception-flow`
+
+Private symbol-map schema 2 separates actual per-function `Applied` evidence from
+the effective `Requested` policy. A skipped transform appears only in `Requested`.
 
 PE-wide metadata and startup transforms remain global. This prevents a
 function rule from pretending it can scope a structure that exists only once in

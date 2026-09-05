@@ -1,4 +1,7 @@
 <Project>
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)..\'))"
+          Condition="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)..\')) != ''" />
+
   <PropertyGroup>
     <Version>0.1.0</Version>
     <Authors>System Locker</Authors>
@@ -6,9 +9,12 @@
     <PackageLicenseExpression>CC0-1.0</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/systemlocker/Rampart-Obfuscator</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/systemlocker/Rampart-Obfuscator</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)FEATURES.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>

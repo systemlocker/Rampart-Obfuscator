@@ -12,7 +12,6 @@ public sealed class ControlFlowFlatteningPass
 
     public void Run(BuildContext ctx)
     {
-        int changed = 0;
         foreach (var function in ctx.Functions)
         {
             if (ctx.LevelFor(KnobId, function) == ProtectionLevel.Off)
@@ -40,14 +39,12 @@ public sealed class ControlFlowFlatteningPass
                     entry[0] = 0xE9;
                     BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(1), (int)displacement);
                     ctx.Pe.WriteRva(function.BeginRva, entry);
-                    changed++;
+                    ctx.MarkApplied(function, KnobId, ProtectionLevel.Light);
                     ctx.Log.Add(new("flattening", $"flattened {function.Name} at RVA {function.BeginRva:X8} into {code.Length} bytes"));
                     continue;
                 }
             }
             ctx.Log.Add(new("flattening", $"skipped {function.Name} at RVA {function.BeginRva:X8}: {reason}"));
         }
-        if (changed != 0)
-            ctx.MarkApplied(KnobId, ProtectionLevel.Light);
     }
 }

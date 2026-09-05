@@ -9,16 +9,22 @@ public static class ProtectionCapabilities
 {
     private static readonly Dictionary<string, ProtectionLevel> ReadyLevels = new(StringComparer.Ordinal)
     {
-        ["packaging.symbol-scrub"] = ProtectionLevel.Heavy,
+        ["packaging.symbol-scrub"] = ProtectionLevel.Maximum,
         ["packaging.import-concealment"] = ProtectionLevel.Light,
-        ["packaging.header-disguise"] = ProtectionLevel.Balanced,
+        ["packaging.header-disguise"] = ProtectionLevel.Maximum,
         ["packaging.ep-confusion"] = ProtectionLevel.Light,
         ["packaging.packer"] = ProtectionLevel.Light,
         ["code-transformation.flattening"] = ProtectionLevel.Light,
         ["virtualization.per-build-isa"] = ProtectionLevel.Light,
         ["virtualization.coverage"] = ProtectionLevel.Light,
+        ["virtualization.extended-isa"] = ProtectionLevel.Light,
+        ["virtualization.handler-polymorphism"] = ProtectionLevel.Light,
+        ["virtualization.vm-nesting"] = ProtectionLevel.Light,
+        ["virtualization.runtime-rekey"] = ProtectionLevel.Light,
+        ["nuclear.nanomites"] = ProtectionLevel.Light,
+        ["nuclear.exception-flow"] = ProtectionLevel.Light,
         ["code-transformation.junk-insertion"] = ProtectionLevel.Maximum,
-        ["code-transformation.mba-constants"] = ProtectionLevel.Balanced,
+        ["code-transformation.mba-constants"] = ProtectionLevel.Maximum,
         ["code-transformation.per-build-mutation"] = ProtectionLevel.Light,
         ["strings.encryption"] = ProtectionLevel.Balanced,
         ["strings.anti-instrumentation"] = ProtectionLevel.Light,
@@ -74,6 +80,12 @@ public static class ProtectionCapabilities
         "code-transformation.mba-constants",
         "virtualization.per-build-isa",
         "virtualization.coverage",
+        "virtualization.extended-isa",
+        "virtualization.handler-polymorphism",
+        "virtualization.vm-nesting",
+        "virtualization.runtime-rekey",
+        "nuclear.nanomites",
+        "nuclear.exception-flow",
     };
 
     /// <summary>
@@ -132,42 +144,12 @@ public static class ProtectionCapabilities
                 if (!Enum.IsDefined(level) || level > MaxReadyLevel(id))
                     throw new NotSupportedException($"Per-function knob '{id}' is not ready at {level}.");
             }
-
-            ProtectionLevel RuleLevel(string id)
-            {
-                if (rule.Knobs.TryGetValue(id, out ProtectionLevel exact))
-                    return exact;
-                if (rule.Preset is null)
-                    return settings.LevelOf(catalog.Get(id));
-                return string.Equals(rule.Preset, "off", StringComparison.OrdinalIgnoreCase)
-                    ? ProtectionLevel.Off
-                    : ClampToReady(id, Presets.DefaultLevel(rule.Preset.ToLowerInvariant(), catalog.Get(id)));
-            }
-
-            ProtectionLevel ruleImports = RuleLevel("packaging.import-concealment");
-            ProtectionLevel ruleStrings = RuleLevel("strings.encryption");
-            ProtectionLevel ruleStringInstrumentation = RuleLevel("strings.anti-instrumentation");
-            ProtectionLevel ruleStringCoverage = RuleLevel("strings.coverage");
-            if ((RuleLevel("virtualization.per-build-isa") == ProtectionLevel.Off)
-                != (RuleLevel("virtualization.coverage") == ProtectionLevel.Off))
-            {
-                throw new ArgumentException(
-                    "A function rule must enable virtualization.per-build-isa and virtualization.coverage together.");
-            }
-            if (settings.LevelOf(catalog.Get("packaging.ep-confusion")) == ProtectionLevel.Off
-                && (ruleImports != ProtectionLevel.Off || ruleStrings != ProtectionLevel.Off))
-            {
-                throw new ArgumentException(
-                    "packaging.ep-confusion must be enabled when a function rule enables imports or strings.");
-            }
-            if (ruleStrings == ProtectionLevel.Off
-                && (ruleStringInstrumentation != ProtectionLevel.Off || ruleStringCoverage != ProtectionLevel.Off))
-            {
-                throw new ArgumentException(
-                    "A function rule cannot enable string coverage or anti-instrumentation while strings.encryption is off.");
-            }
         }
 
+        // Rules compose in document order, and matching depends on functions
+        // discovered from the input image. Validate their final dependency state
+        // in ValidateEffectiveFunctionPolicies instead of judging each partial
+        // rule against the global defaults.
         var entryPoint = settings.LevelOf(catalog.Get("packaging.ep-confusion"));
         var imports = settings.LevelOf(catalog.Get("packaging.import-concealment"));
         var strings = settings.LevelOf(catalog.Get("strings.encryption"));
@@ -179,6 +161,13 @@ public static class ProtectionCapabilities
         {
             throw new ArgumentException(
                 "virtualization.per-build-isa and virtualization.coverage must be enabled together.");
+        }
+        if (VmModifierIds.Any(id => settings.LevelOf(catalog.Get(id)) != ProtectionLevel.Off)
+            && (settings.LevelOf(catalog.Get("virtualization.per-build-isa")) == ProtectionLevel.Off
+                || settings.LevelOf(catalog.Get("virtualization.coverage")) == ProtectionLevel.Off))
+        {
+            throw new ArgumentException(
+                "Virtualization modifiers require virtualization.per-build-isa and virtualization.coverage.");
         }
         string[] startupKnobs =
         [
@@ -203,6 +192,8 @@ public static class ProtectionCapabilities
             "response.tool-response",
             "response.custom-messages",
             "nuclear.injection-hunter",
+            "nuclear.nanomites",
+            "nuclear.exception-flow",
         ];
         bool runtimeGuardEnabled = startupKnobs.Any(id =>
             settings.LevelOf(catalog.Get(id)) != ProtectionLevel.Off);
@@ -220,6 +211,69 @@ public static class ProtectionCapabilities
         {
             throw new ArgumentException(
                 "strings.encryption must be enabled when string coverage or anti-instrumentation is enabled.");
+        }
+    }
+
+    private static readonly string[] VmModifierIds =
+    [
+        "virtualization.extended-isa",
+        "virtualization.handler-polymorphism",
+        "virtualization.vm-nesting",
+        "virtualization.runtime-rekey",
+    ];
+
+    /// <summary>
+    /// Validates dependency relationships after ordered rules have been resolved
+    /// against the functions discovered in the input image.
+    /// </summary>
+    public static void ValidateEffectiveFunctionPolicies(
+        ProtectionSettings settings,
+        KnobCatalog catalog,
+        IEnumerable<Rampart.Engine.FunctionDescriptor> functions)
+    {
+        var policy = new Rampart.Engine.FunctionPolicy(settings, catalog);
+        ProtectionLevel entryPoint = settings.LevelOf(catalog.Get("packaging.ep-confusion"));
+        foreach (Rampart.Engine.FunctionDescriptor function in functions.Where(policy.IsSelected))
+        {
+            ProtectionLevel vmIsa = policy.Level("virtualization.per-build-isa", function);
+            ProtectionLevel vmCoverage = policy.Level("virtualization.coverage", function);
+            if ((vmIsa == ProtectionLevel.Off) != (vmCoverage == ProtectionLevel.Off))
+            {
+                throw new ArgumentException(
+                    $"Function '{function.Name}' must enable virtualization.per-build-isa and " +
+                    "virtualization.coverage together after ordered rules are applied.");
+            }
+
+            if (VmModifierIds.Any(id => policy.Level(id, function) != ProtectionLevel.Off)
+                && (vmIsa == ProtectionLevel.Off || vmCoverage == ProtectionLevel.Off))
+            {
+                throw new ArgumentException(
+                    $"Function '{function.Name}' enables a virtualization modifier without " +
+                    "virtualization.per-build-isa and virtualization.coverage after ordered rules are applied.");
+            }
+
+            ProtectionLevel imports = policy.Level("packaging.import-concealment", function);
+            ProtectionLevel strings = policy.Level("strings.encryption", function);
+            if (entryPoint == ProtectionLevel.Off
+                && (imports != ProtectionLevel.Off || strings != ProtectionLevel.Off
+                    || policy.Level("nuclear.nanomites", function) != ProtectionLevel.Off
+                    || policy.Level("nuclear.exception-flow", function) != ProtectionLevel.Off))
+            {
+                throw new ArgumentException(
+                    $"packaging.ep-confusion must be enabled because function '{function.Name}' enables " +
+                    "a startup-dependent protection after ordered rules are applied.");
+            }
+
+            ProtectionLevel stringInstrumentation =
+                policy.Level("strings.anti-instrumentation", function);
+            ProtectionLevel stringCoverage = policy.Level("strings.coverage", function);
+            if (strings == ProtectionLevel.Off
+                && (stringInstrumentation != ProtectionLevel.Off || stringCoverage != ProtectionLevel.Off))
+            {
+                throw new ArgumentException(
+                    $"Function '{function.Name}' must enable strings.encryption because string coverage " +
+                    "or anti-instrumentation remains enabled after ordered rules are applied.");
+            }
         }
     }
 }

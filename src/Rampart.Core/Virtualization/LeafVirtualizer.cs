@@ -4,104 +4,66 @@ using Rampart.X64;
 namespace Rampart.Virtualization;
 
 /// <summary>A position-independent leaf interpreter followed by its immutable bytecode.</summary>
-public sealed record CompiledLeafVm(byte[] Code, int BytecodeOffset, int InstructionCount);
+public sealed record CompiledLeafVm(byte[] Code, int BytecodeOffset, int InstructionCount)
+{
+    public bool UsesExtendedIsa { get; init; }
+    public int PolymorphicHandlerCount { get; init; }
+    public int? MicrocodeOffset { get; init; }
+    public byte[]? UnwindInfo { get; init; }
+    public int RuntimeFrameSize { get; init; }
+}
+
+/// <summary>Optional, independently selectable leaf-interpreter extensions.</summary>
+public sealed record LeafVmOptions
+{
+    public bool ExtendedIsa { get; init; }
+    public bool HandlerPolymorphism { get; init; }
+    public bool Nested { get; init; }
+    public bool RuntimeRekey { get; init; }
+}
 
 /// <summary>
 /// Lifts a deliberately small, straight-line accumulator ISA. No accepted instruction
 /// reads memory, changes the stack, consumes incoming flags, or writes a nonvolatile
-/// register. Both the native entry trampoline and interpreter therefore remain leaf
-/// functions under the Windows x64 unwind convention.
+/// register. The optional re-keying interpreter owns a bounded stack frame and
+/// supplies Windows x64 unwind metadata; other variants do not change the stack.
 /// </summary>
-public static class LeafVirtualizer
+public static partial class LeafVirtualizer
 {
-    private enum Operation { Move, Add, Subtract, Xor, Return }
+    private enum Operation
+    {
+        Move, Add, Subtract, Xor, Return,
+        VectorLoad0, VectorLoad1, VectorRead0, VectorRead1,
+        VectorZero0, VectorZero1, VectorCopy0, VectorCopy1,
+        VectorAdd0, VectorAdd1, VectorSubtract0, VectorSubtract1,
+        VectorXor0, VectorXor1, VectorAnd0, VectorAnd1, VectorOr0, VectorOr1,
+    }
     private readonly record struct Instruction(Operation Operation, bool Wide, bool Input, ulong Operand);
 
     public static bool TryCompile(ReadOnlySpan<byte> native, Random random,
+        out CompiledLeafVm? compiled, out string reason) =>
+        TryCompile(native, random, new LeafVmOptions(), out compiled, out reason);
+
+    public static bool TryCompile(ReadOnlySpan<byte> native, Random random, LeafVmOptions options,
         out CompiledLeafVm? compiled, out string reason)
     {
         ArgumentNullException.ThrowIfNull(random);
+        ArgumentNullException.ThrowIfNull(options);
         compiled = null;
-        if (!TryLift(native, out List<Instruction> instructions, out reason))
+        if (!TryLift(native, options.ExtendedIsa, out List<Instruction> instructions, out reason))
             return false;
-
-        // Opcodes and virtual input-register IDs are independently permuted. The
-        // operand mask is format diversification, not a cryptographic secrecy claim.
-        byte[] permutation = Enumerable.Range(1, 255).Select(value => (byte)value).ToArray();
-        random.Shuffle(permutation);
-        var kinds = instructions.Select(i => (i.Operation, i.Wide, i.Input)).Distinct().ToArray();
-        var opcodes = kinds.Select((kind, index) => (kind, code: permutation[index]))
-            .ToDictionary(item => item.kind, item => item.code);
-        byte firstInput = permutation[253], secondInput = permutation[254];
-        byte[] keyBytes = new byte[8];
-        random.NextBytes(keyBytes);
-        ulong key = BinaryPrimitives.ReadUInt64LittleEndian(keyBytes);
-        Reg accumulator = random.Next(2) == 0 ? Reg.Rax : Reg.R8;
-        var asm = new Asm();
-        asm.LeaRip(Reg.R10, "bytecode");
-        asm.Label("dispatch");
-        asm.Db(0x45, 0x0F, 0xB6, 0x1A); // movzx r11d, byte [r10]
-        foreach (var kind in kinds)
+        if (options.RuntimeRekey && instructions.Count > 32)
         {
-            asm.Mov32Ri(Reg.R9, opcodes[kind]);
-            asm.CmpRr(Reg.R11, Reg.R9).Jcc(Cc.E, Label(kind));
+            reason = "runtime re-keying supports at most 32 bytecode instructions including RET";
+            return false;
         }
-        // This edge is unreachable for compiler-produced immutable bytecode. It
-        // returns safely instead of introducing an exception-based dispatcher.
-        asm.Jmp("return");
-        foreach (var kind in kinds)
-        {
-            asm.Label(Label(kind));
-            if (kind.Operation == Operation.Return)
-            {
-                asm.Jmp("return");
-                continue;
-            }
-            asm.MovRm(Reg.R11, Reg.R10, 1);
-            asm.MovRi(Reg.R9, unchecked((long)key)).XorRr(Reg.R11, Reg.R9);
-            if (kind.Input)
-            {
-                string useSecond = Label(kind) + "_second", ready = Label(kind) + "_ready";
-                asm.Mov32Ri(Reg.R9, firstInput).CmpRr(Reg.R11, Reg.R9).Jcc(Cc.Ne, useSecond);
-                asm.MovRr(Reg.R11, Reg.Rcx).Jmp(ready);
-                asm.Label(useSecond).MovRr(Reg.R11, Reg.Rdx);
-                asm.Label(ready);
-            }
-            byte opcode = kind.Operation switch
-            {
-                Operation.Move => 0x89, Operation.Add => 0x01,
-                Operation.Subtract => 0x29, Operation.Xor => 0x31,
-                _ => throw new InvalidOperationException(),
-            };
-            // REX.R selects r11 as the source; REX.B selects the build's host
-            // accumulator. Without REX.W, x64 zero-extends every 32-bit result.
-            asm.Db((byte)(0x44 | (kind.Wide ? 8 : 0) | (accumulator == Reg.R8 ? 1 : 0)),
-                opcode, (byte)(0xD8 | ((int)accumulator & 7)));
-            asm.AddRi(Reg.R10, 9).Jmp("dispatch");
-        }
-        asm.Label("return");
-        if (accumulator != Reg.Rax)
-            asm.MovRr(Reg.Rax, accumulator);
-        asm.Ret();
-        asm.Align(8).Label("bytecode");
-        int bytecodeOffset = asm.Position;
-        foreach (Instruction instruction in instructions)
-        {
-            ulong operand = instruction.Input
-                ? instruction.Operand == 1 ? firstInput : secondInput
-                : instruction.Operand;
-            asm.Db(opcodes[(instruction.Operation, instruction.Wide, instruction.Input)]);
-            asm.Dq(operand ^ key);
-        }
-        compiled = new CompiledLeafVm(asm.Assemble(), bytecodeOffset, instructions.Count);
+        compiled = Emit(instructions, random, options);
         reason = "";
         return true;
-
-        static string Label((Operation Operation, bool Wide, bool Input) kind) =>
-            $"handler_{kind.Operation}_{kind.Wide}_{kind.Input}";
     }
 
-    private static bool TryLift(ReadOnlySpan<byte> native, out List<Instruction> instructions, out string reason)
+    private static bool TryLift(ReadOnlySpan<byte> native, bool extended,
+        out List<Instruction> instructions, out string reason)
     {
         instructions = [];
         reason = "outside the verified accumulator instruction subset";
@@ -111,10 +73,21 @@ public static class LeafVirtualizer
             return false;
         }
         bool initialized = false;
+        bool[] vectors = [false, false];
         int cursor = 0;
         while (cursor < native.Length && instructions.Count < 256)
         {
             byte opcode = native[cursor++];
+            if (opcode == 0x66 && extended)
+            {
+                if (!TryLiftVector(native, ref cursor, ref initialized, vectors, out Instruction vector))
+                {
+                    reason = "outside the verified register-only SSE2 subset or reads uninitialized vector state";
+                    return false;
+                }
+                instructions.Add(vector);
+                continue;
+            }
             if (opcode == 0x90)
                 continue;
             if (opcode == 0xC3)
@@ -192,8 +165,10 @@ public static class LeafVirtualizer
                     return false;
                 operation = opcode switch
                 {
-                    0x89 or 0x8B => Operation.Move, 0x01 or 0x03 => Operation.Add,
-                    0x29 or 0x2B => Operation.Subtract, _ => Operation.Xor,
+                    0x89 or 0x8B => Operation.Move,
+                    0x01 or 0x03 => Operation.Add,
+                    0x29 or 0x2B => Operation.Subtract,
+                    _ => Operation.Xor,
                 };
                 if (source == 0 && operation == Operation.Xor)
                 {

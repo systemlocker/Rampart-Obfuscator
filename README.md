@@ -23,13 +23,13 @@ requirements, and compatibility limits.
 
 | Protection | Verified through |
 | --- | --- |
-| Symbol scrub | Heavy |
+| Symbol scrub | Maximum |
 | Import concealment | Light |
-| PE header disguise | Balanced |
+| PE header disguise | Maximum |
 | Entry-point routing and disassembly confusion | Light |
 | Junk/dead-code insertion | Maximum |
 | Runtime-stub constant splitting | Light |
-| Selected native-function constant splitting | Balanced |
+| Selected native-function constant splitting | Maximum |
 | Per-build mutation | Light |
 | Layered string encryption | Balanced |
 | String decryptor/table integrity checks | Light |
@@ -46,6 +46,9 @@ requirements, and compatibility limits.
 | Initialized writable-data packing | Light |
 | Selected leaf-function control-flow flattening | Light |
 | Per-build leaf-function VM and explicit coverage | Light |
+| Integer SSE2 virtualization and VM handler variants | Light |
+| Nested VM and invocation-owned bytecode re-keying | Light |
+| Exception-dispatched branches and control-flow edges | Light |
 
 The build pipeline targets PE32+ AMD64 images and preserves ASLR relocations.
 Native executable overlays are retained after the new Rampart section. DLLs,
@@ -53,12 +56,31 @@ managed .NET images, and already-protected inputs are rejected during preflight.
 Because transforms invalidate Authenticode, sign the protected output rather than
 the input binary.
 
+## Install
+
+The Windows x64 archive includes the .NET runtime. Extract the archive, then run:
+
+```powershell
+.\rampart.exe --version
+.\rampart.exe knobs
+```
+
+To install the .NET tool with the .NET 8 SDK or newer:
+
+```powershell
+dotnet tool install --global rampart --version 0.1.0
+rampart --version
+```
+
+The `Rampart.Core` NuGet package provides the transformation engine for .NET 8
+applications. Add it with `dotnet add package Rampart.Core --version 0.1.0`.
+
 ## Build
 
 Install the .NET 8 SDK, then run:
 
 ```powershell
-dotnet build Rampart.slnx
+dotnet build src/Rampart.Cli/Rampart.Cli.csproj
 ```
 
 The core library builds cross-platform. Run and verify protected executables on
@@ -151,18 +173,22 @@ Function-level policy applies to import-reference concealment, junk insertion, t
 encryption, string anti-instrumentation, and string coverage; image-wide PE and
 startup transforms continue to use the global level.
 
-The Light VM and control-flow flattening also accept function policies, but
+The Light VM, exception-flow transforms, and control-flow flattening accept function policies, but
 require explicit symbol/RVA selection or a matching enabling rule. These
 native-body emitters accept only small, single-entry, register-only leaf functions
 with empty unwind records. They leave unsupported functions native and explain
 each skip in the build log. The VM supports a straight-line scalar accumulator
-subset; flattening supports a conditional 32-bit register-only control-flow subset.
-Neither accepts load-configuration/CFG images. When both select the same
-function, virtualization has priority, followed by flattening, then native junk
+subset with an optional integer SSE2 extension; flattening and exception flow
+support a conditional 32-bit register-only control-flow subset.
+These transforms reject load-configuration/CFG images. For overlapping selections,
+virtualization has priority, followed by exception flow, flattening, then native junk
 and constant rewriting. Later passes never rewrite a body already owned by an
 earlier native transform.
 
-Balanced MBA can split target immediates in the verified 32-bit native subset.
+Balanced MBA splits target immediates in the verified 32-bit native subset.
+Heavy nests two reconstruction layers; Maximum varies three or four layers of
+arithmetic, XOR, and rotation per constant. The original instruction's flags are
+preserved at every level.
 Balanced through Maximum junk levels add increasing densities of executed,
 flag-preserving noise; Heavy and Maximum also add branches over cold gadgets.
 These body transforms require explicit function selection. If only padding noise
@@ -180,6 +206,35 @@ dotnet run --project src/Rampart.Cli -- protect ExampleApp.exe `
 `--set` and per-function rules must enable `virtualization.per-build-isa` and
 `virtualization.coverage` together. All presets keep these native-body transforms
 and packing off until explicitly selected.
+
+VM extensions can be selected with `--only virtualization.extended-isa`,
+`--only virtualization.handler-polymorphism`, `--only virtualization.vm-nesting`,
+or `--only virtualization.runtime-rekey`; each adds the required VM pair. Exact
+overrides and function rules must leave that pair enabled. These extensions also
+stay off in every preset.
+
+The integer SSE2 extension supports register-only MOVD/MOVQ, MOVDQA, packed
+dword/qword addition and subtraction, and bitwise operations on XMM0/XMM1.
+Vector state must be initialized inside the function, and the result returns
+through EAX/RAX. Memory, floating-point, string, and atomic operations remain
+outside this subset. Handler variants change actual arithmetic and register
+dataflow. Nested execution uses a second, disjoint primitive ISA with its own
+instruction pointer and immutable microcode.
+
+Runtime re-keying supports at most 32 outer bytecode instructions. Each call
+owns two stack buffers and moves/re-encodes its records after each instruction,
+erasing replaced copies and scrubbing the buffers on return. The generated frame
+has Windows unwind metadata. Shared code and templates remain immutable; operand
+masks provide diversification rather than cryptographic encryption.
+
+`nuclear.nanomites` resolves selected branch decisions from saved exception flags.
+`nuclear.exception-flow` represents selected edges through exceptions. Both require
+explicit function selection, an acyclic CFG, and the entry dispatcher. They own
+only exact generated UD2 sites and leave unrelated exceptions to the application.
+Registration failure retains a native fallback. Expected first-chance exceptions
+remain visible to debuggers and crash tooling; use these settings on infrequent
+paths and account for their exception-dispatch cost. A build is limited to 1,024
+owned sites.
 
 Light `packaging.packer` compresses only original initialized writable data
 sections, not executable code. It restores their bytes at startup while keeping

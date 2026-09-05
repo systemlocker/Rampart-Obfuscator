@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using Rampart.Config;
 using Rampart.ControlFlow;
+using Rampart.Pe;
 using Rampart.Virtualization;
 
 namespace Rampart.Engine.Passes;
@@ -40,8 +41,15 @@ public sealed class VirtualizationPass
                 Skip(reason);
                 continue;
             }
+            var options = new LeafVmOptions
+            {
+                ExtendedIsa = ctx.LevelFor("virtualization.extended-isa", function) != ProtectionLevel.Off,
+                HandlerPolymorphism = ctx.LevelFor("virtualization.handler-polymorphism", function) != ProtectionLevel.Off,
+                Nested = ctx.LevelFor("virtualization.vm-nesting", function) != ProtectionLevel.Off,
+                RuntimeRekey = ctx.LevelFor("virtualization.runtime-rekey", function) != ProtectionLevel.Off,
+            };
             if (!LeafVirtualizer.TryCompile(ctx.Pe.ReadRva(function.BeginRva, checked((int)function.Size)),
-                    ctx.Rng, out CompiledLeafVm? vm, out reason))
+                    ctx.Rng, options, out CompiledLeafVm? vm, out reason))
             {
                 Skip(reason);
                 continue;
@@ -55,14 +63,20 @@ public sealed class VirtualizationPass
             if (!ctx.TryClaimFunction(function, "virtualization", target, (uint)vm.Code.Length))
                 throw new InvalidOperationException("Virtualization region ownership changed during emission.");
             ctx.WriteStub(target, vm.Code);
+            if (vm.UnwindInfo is not null)
+                ExceptionTableBuilder.Register(ctx, target, target + (uint)vm.BytecodeOffset, vm.UnwindInfo);
             byte[] jump = new byte[5];
             jump[0] = 0xE9;
             BinaryPrimitives.WriteInt32LittleEndian(jump.AsSpan(1), (int)displacement);
             // Retain the rest of the original body. Erasing it or pretending it is
             // a decoy body is a separate capability, not a prerequisite for lifting.
             ctx.Pe.WriteRva(function.BeginRva, jump);
-            ctx.MarkApplied("virtualization.per-build-isa", isa);
-            ctx.MarkApplied("virtualization.coverage", coverage);
+            ctx.MarkApplied(function, "virtualization.per-build-isa", isa);
+            ctx.MarkApplied(function, "virtualization.coverage", coverage);
+            if (vm.UsesExtendedIsa) ctx.MarkApplied(function, "virtualization.extended-isa", ProtectionLevel.Light);
+            if (vm.PolymorphicHandlerCount > 0) ctx.MarkApplied(function, "virtualization.handler-polymorphism", ProtectionLevel.Light);
+            if (vm.MicrocodeOffset is not null) ctx.MarkApplied(function, "virtualization.vm-nesting", ProtectionLevel.Light);
+            if (vm.UnwindInfo is not null) ctx.MarkApplied(function, "virtualization.runtime-rekey", ProtectionLevel.Light);
             ctx.Log.Add(new("vm", $"lifted {function.Name} at {function.BeginRva:X8} to {target:X8}: " +
                 $"{vm.InstructionCount} bytecode instructions, {vm.Code.Length} emitted bytes"));
             changed++;

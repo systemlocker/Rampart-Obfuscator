@@ -25,6 +25,28 @@ public sealed class HeaderDisguisePass
         pe.TimeDateStamp = (uint)(1_700_000_000 + rng.NextInt64(0, 200_000_000));
         pe.LinkerVersion = ((byte)rng.Next(10, 15), (byte)rng.Next(0, 33));
 
+        if (level >= Config.ProtectionLevel.Heavy)
+        {
+            // Only build identity changes. Machine, subsystem, and minimum OS
+            // versions retain the application's loader compatibility contract.
+            byte[] linkerMinors = [0, 10, 20, 30];
+            pe.LinkerVersion = (14, linkerMinors[rng.Next(linkerMinors.Length)]);
+            pe.ImageVersion = ((ushort)rng.Next(1, 5), (ushort)rng.Next(0, 10));
+            var export = pe.Directory(DataDir.Export);
+            if (!export.IsEmpty && export.Size >= 40)
+                pe.WriteRva(export.RelativeVirtualAddress + 4, BitConverter.GetBytes(pe.TimeDateStamp));
+            var debug = pe.Directory(DataDir.Debug);
+            if (!debug.IsEmpty)
+            {
+                if (debug.Size % 28 != 0) throw new BadImageFormatException("Incomplete debug directory.");
+                for (uint offset = 0; offset < debug.Size; offset += 28)
+                    pe.WriteRva(debug.RelativeVirtualAddress + offset + 4, BitConverter.GetBytes(pe.TimeDateStamp));
+            }
+            // Import timestamps are binding state, not cosmetic build identity.
+            // They must not be changed to imitate the COFF timestamp.
+            ctx.Log.Add(new("header-disguise", "applied a consistent linker/image-version profile and export/debug timestamps"));
+        }
+
         if (level >= Config.ProtectionLevel.Balanced)
         {
             // Decoy PDB path in the DOS-stub area: plausible string, points at

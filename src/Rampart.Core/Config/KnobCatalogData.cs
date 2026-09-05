@@ -9,13 +9,13 @@ public static class KnobCatalogData
     public static readonly IEnumerable<KnobDef> Entries =
     [
         new("packaging.symbol-scrub", KnobGroups.Packaging, "Symbol scrub",
-            "Removes debug-directory and PDB-path data, the Rich header, section names, COFF symbol remnants, and build timestamps according to level.",
-            [1, 1, 1, 0],
+            "Removes debug/PDB data, Rich data, section names, COFF symbol information, and build timestamps according to level.",
+            [1, 1, 1, 1],
             [
                 "Strips the debug directory and any embedded PDB path from the image.",
                 "Also zeroes the Rich header and blanks section names in the section table.",
-                "Also zeroes timestamp fields across the headers (TimeDateStamp and the export/import table clocks).",
-                "Not supported at this level.",
+                "Also replaces the COFF timestamp and clears the export timestamp and every import-descriptor timestamp.",
+                "Also clears validated file-only COFF symbol and string-table payloads while preserving adjacent overlay data; mapped or malformed COFF payloads are rejected.",
             ],
             [ThreatTags.Static]),
 
@@ -32,12 +32,12 @@ public static class KnobCatalogData
 
         new("packaging.header-disguise", KnobGroups.Packaging, "Header disguise",
             "Replaces genuine timestamp and selected linker metadata with build-seeded decoy values.",
-            [1, 1, 0, 0],
+            [1, 1, 1, 1],
             [
                 "Replaces the COFF timestamp and linker version with build-seeded values.",
                 "Also writes a decoy PDB path into DOS-stub slack when sufficient space is available.",
-                "Not supported at this level.",
-                "Not supported at this level.",
+                "Uses a consistent linker/image-version profile and matching export/debug timestamps while preserving loader compatibility and import-binding fields.",
+                "Also computes the PE checksum after all transformations, including final section layout, relocations, and overlay bytes.",
             ],
             [ThreatTags.Static]),
 
@@ -108,13 +108,13 @@ public static class KnobCatalogData
             [ThreatTags.Static]),
 
         new("code-transformation.mba-constants", KnobGroups.CodeTransformation, "MBA constants",
-            "Light splits generated constants; Balanced additionally reconstructs eligible target immediates through seeded modular arithmetic/boolean identities, preserving live flags. Stub-only work reports Light.",
-            [1, 1, 0, 0],
+            "Reconstructs eligible constants through seeded modular arithmetic/boolean identities of increasing depth while preserving live flags. Stub-only work reports Light.",
+            [1, 1, 2, 3],
             [
                 "XOR-splits constants in Rampart-generated runtime stubs.",
                 "Reconstructs eligible immediates in explicitly selected 32-bit leaf functions with seeded modular arithmetic and XOR; preserves live flags and reports stub-only work as Light.",
-                "Not supported at this level.",
-                "Not supported at this level.",
+                "Nests two reconstruction layers for eligible target immediates, retaining the same register and flag-liveness proof.",
+                "Selects three or four nested layers per constant and varies add/XOR and XOR/rotate/add identities with the build seed; the original operation restores its flags last.",
             ],
             [ThreatTags.Static, ThreatTags.Tools]),
 
@@ -368,15 +368,39 @@ public static class KnobCatalogData
             ],
             [ThreatTags.Static, ThreatTags.Tools]),
 
-        Unsupported("virtualization.extended-isa", KnobGroups.Virtualization, [ThreatTags.Static, ThreatTags.Tools]),
+        new("virtualization.extended-isa", KnobGroups.Virtualization, "Integer SIMD virtualization",
+            "Extends selected leaf functions with verified register-only SSE2 integer operations and explicit vector initialization.",
+            [1, 0, 0, 0],
+            [
+                "Lifts MOVD/MOVQ, register MOVDQA, packed dword/qword addition and subtraction, and bitwise operations on XMM0/XMM1; memory, floating-point, string, and atomic instructions remain unsupported.",
+                "Not supported at this level.", "Not supported at this level.", "Not supported at this level.",
+            ], [ThreatTags.Static, ThreatTags.Tools]),
 
-        Unsupported("virtualization.handler-polymorphism", KnobGroups.Virtualization, [ThreatTags.Static, ThreatTags.Tools]),
+        new("virtualization.handler-polymorphism", KnobGroups.Virtualization, "VM handler variants",
+            "Selects equivalent arithmetic and register-dataflow handler implementations independently for each emitted interpreter.",
+            [1, 0, 0, 0],
+            [
+                "Varies scalar handler identities, vector transfer paths, operand encodings, and handler order using the build seed; also applies to nested interpreter handlers.",
+                "Not supported at this level.", "Not supported at this level.", "Not supported at this level.",
+            ], [ThreatTags.Static, ThreatTags.Tools]),
 
-        Unsupported("virtualization.vm-nesting", KnobGroups.Virtualization, [ThreatTags.Static, ThreatTags.Tools]),
+        new("virtualization.vm-nesting", KnobGroups.Virtualization, "Nested leaf VM",
+            "Executes selected VM operations through a second interpreter with a disjoint opcode set and primitive microprograms.",
+            [1, 0, 0, 0],
+            [
+                "Uses independent outer and micro instruction pointers, immutable bytecode, and register-local state. Subtraction and XOR execute as composed primitive operations without changing the native stack.",
+                "Not supported at this level.", "Not supported at this level.", "Not supported at this level.",
+            ], [ThreatTags.Static, ThreatTags.Tools]),
 
         Unsupported("virtualization.jit-handlers", KnobGroups.Virtualization, [ThreatTags.Dump, ThreatTags.Tools]),
 
-        Unsupported("virtualization.runtime-rekey", KnobGroups.Virtualization, [ThreatTags.Dump, ThreatTags.Static]),
+        new("virtualization.runtime-rekey", KnobGroups.Virtualization, "Runtime bytecode re-keying",
+            "Moves and re-encodes outer bytecode between invocation-owned stack buffers after each completed instruction.",
+            [1, 0, 0, 0],
+            [
+                "Supports up to 32 bytecode instructions, erases replaced copies and return-time buffers, and supplies unwind metadata for the private frame. Shared templates remain immutable; operand masks are diversification, not cryptographic encryption.",
+                "Not supported at this level.", "Not supported at this level.", "Not supported at this level.",
+            ], [ThreatTags.Dump, ThreatTags.Static]),
 
         Unsupported("virtualization.decoy-bodies", KnobGroups.Virtualization, [ThreatTags.Static]),
 
@@ -461,9 +485,21 @@ public static class KnobCatalogData
             ],
             [ThreatTags.Debug, ThreatTags.Tools]),
 
-        Unsupported("nuclear.nanomites", KnobGroups.Response, [ThreatTags.Static, ThreatTags.Debug, ThreatTags.Tools]),
+        new("nuclear.nanomites", KnobGroups.Response, "Exception-dispatched branches",
+            "Resolves selected conditional branches from the saved Windows exception context at exact application-owned sites.",
+            [1, 0, 0, 0],
+            [
+                "Replaces conditional branches in explicitly selected acyclic integer leaf CFGs with owned UD2 sites; the handler evaluates saved flags and resumes a verified successor. Unrelated exceptions pass through.",
+                "Not supported at this level.", "Not supported at this level.", "Not supported at this level.",
+            ], [ThreatTags.Static, ThreatTags.Debug, ThreatTags.Tools]),
 
-        Unsupported("nuclear.exception-flow", KnobGroups.Response, [ThreatTags.Static, ThreatTags.Tools]),
+        new("nuclear.exception-flow", KnobGroups.Response, "Exception control flow",
+            "Represents selected control-flow edges through a bounded application-owned exception dispatcher.",
+            [1, 0, 0, 0],
+            [
+                "Routes unconditional and taken conditional edges through exact owned exception sites in explicitly selected acyclic leaf CFGs. Registration failure uses the original native CFG; code stays immutable.",
+                "Not supported at this level.", "Not supported at this level.", "Not supported at this level.",
+            ], [ThreatTags.Static, ThreatTags.Tools]),
 
         new("response.tool-response", KnobGroups.Response, "Detection response",
             "Converts a shared detection flag into a clean process exit; no destructive response is implemented.",

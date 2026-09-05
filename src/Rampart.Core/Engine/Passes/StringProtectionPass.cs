@@ -62,6 +62,14 @@ public sealed class StringProtectionPass
                 ulong k2 = ((ulong)ctx.Rng.NextInt64()) | 1;
                 EncryptAt(ctx, item.Rva, item.Length, k1, k2, rolling);
                 table.Add(new EncString(item.Rva, item.Length, k1, k2));
+                foreach (FunctionDescriptor owner in item.Owners)
+                {
+                    ctx.MarkApplied(owner, "strings.encryption", item.Encryption);
+                    ctx.MarkApplied(owner, "strings.coverage", item.Coverage);
+                    if (item.Integrity != Config.ProtectionLevel.Off)
+                        ctx.MarkApplied(owner, "strings.anti-instrumentation",
+                            Config.ProtectionLevel.Light);
+                }
             }
 
             uint initRva = EmitDecryptor(ctx, table, rolling, levelGroup.Key.Guard, taint, state, protectIat);
@@ -77,10 +85,6 @@ public sealed class StringProtectionPass
             $"encrypted {encrypted} strings in place with {decryptors} scoped decryptor(s)" +
             $" ({chosen.Count(item => item.UnitSize == 2)} UTF-16LE), {guarded} checked decryptor/table pair(s)" +
             (taint ? "; startup keys bound to shared session state" : "")));
-        ctx.MarkApplied("strings.encryption", chosen.Max(item => item.Encryption));
-        ctx.MarkApplied("strings.coverage", chosen.Max(item => item.Coverage));
-        if (guarded > 0)
-            ctx.MarkApplied("strings.anti-instrumentation", Config.ProtectionLevel.Light);
         if (ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
             ctx.MarkApplied("code-transformation.mba-constants", Config.ProtectionLevel.Light);
     }

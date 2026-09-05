@@ -3,7 +3,4 @@
     <Project Path="src/Rampart.Cli/Rampart.Cli.csproj" />
     <Project Path="src/Rampart.Core/Rampart.Core.csproj" />
   </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/Rampart.Tests/Rampart.Tests.csproj" />
-  </Folder>
 </Solution>

@@ -46,6 +46,7 @@ public sealed class Protector
 
         var ctx = new BuildContext(pe, settings, catalog, symbols);
         ctx.Analyze();
+        ProtectionCapabilities.ValidateEffectiveFunctionPolicies(settings, catalog, ctx.Functions);
         var packing = new SectionPackingPass();
         packing.Prepare(ctx); // Capture original loader ownership before metadata is scrubbed.
 
@@ -72,6 +73,7 @@ public sealed class Protector
 
         // --- passes, in order ---------------------------------------------------
         new VirtualizationPass().Run(ctx);
+        new ExceptionFlowPass().Run(ctx);
         new ControlFlowFlatteningPass().Run(ctx); // VM ownership wins on overlapping selections.
         new CodeTransformPass().Run(ctx);         // remaining selected native bodies and padding
         RunAndRecord(() => new IdaBombPass().Run(ctx), "analysis.ida-bomb");
@@ -117,6 +119,14 @@ public sealed class Protector
         RelocBuilder.Rebuild(ctx);
 
         byte[] output = pe.ToBytes();
+        if (ctx.Level("packaging.header-disguise") == ProtectionLevel.Maximum)
+        {
+            // The checksum must include final relocations, section growth, and
+            // overlays. Calculating it inside the earlier header pass is stale.
+            pe.Checksum = PeChecksum.Compute(output);
+            output = pe.ToBytes();
+            ctx.Log.Add(new("header-disguise", $"computed final PE checksum {pe.Checksum:X8}"));
+        }
         string inputSha256 = Convert.ToHexString(SHA256.HashData(input));
         string outputSha256 = Convert.ToHexString(SHA256.HashData(output));
         if (!input.AsSpan().SequenceEqual(output)
@@ -166,7 +176,12 @@ public sealed class Protector
                     Transformation = ctx.FunctionTransformations.TryGetValue(function.BeginRva, out var owner)
                         ? owner.Pass : null,
                     Size = function.Size,
-                    Applied = ctx.FunctionPolicy.EffectiveLevels(function),
+                    Applied = ctx.AppliedTo(function)
+                        .OrderBy(item => item.Key, StringComparer.Ordinal)
+                        .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),
+                    Requested = ctx.FunctionPolicy.EffectiveLevels(function)
+                        .OrderBy(item => item.Key, StringComparer.Ordinal)
+                        .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),
                 }).ToList(),
             },
         };

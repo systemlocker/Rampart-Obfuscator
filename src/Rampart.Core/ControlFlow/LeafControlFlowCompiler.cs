@@ -6,7 +6,7 @@ namespace Rampart.ControlFlow;
 /// <summary>Compiles a bounded, register-only x64 leaf CFG to a direct state
 /// dispatcher. EAX/ECX/EDX are application registers; volatile R10D is private
 /// dispatcher state. No stack, memory, indirect branch, or absolute address is emitted.</summary>
-public static class LeafControlFlowCompiler
+public static partial class LeafControlFlowCompiler
 {
     private enum Kind { Plain, Jump, Conditional, Return }
     private sealed record Instruction(int Offset, byte[] Bytes, Kind Kind, bool WritesFlags = false,

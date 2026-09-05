@@ -47,8 +47,6 @@ public sealed class CodeTransformPass
                 Skip("native body rewriting requires explicit function selection");
                 continue;
             }
-            if (nativeMba && mba != ProtectionLevel.Balanced)
-                throw new InvalidOperationException("Target-constant splitting supports only Balanced.");
             if (ctx.IsFunctionClaimed(function))
             {
                 Skip("function is owned by an earlier transformation");
@@ -66,7 +64,8 @@ public sealed class CodeTransformPass
                 _ => 3,
             } : 0;
             byte[] original = ctx.Pe.ReadRva(function.BeginRva, checked((int)function.Size));
-            if (!NativeLeafCompiler.TryCompile(original, ctx.Rng, new NativeTransformOptions(density, nativeMba),
+            if (!NativeLeafCompiler.TryCompile(original, ctx.Rng,
+                    new NativeTransformOptions(density, nativeMba) { ConstantDepth = nativeMba ? (int)mba - 1 : 1 },
                     out CompiledNativeLeaf? compiled, out reason))
             {
                 Skip(reason);
@@ -83,8 +82,9 @@ public sealed class CodeTransformPass
             entry[0] = 0xE9;
             BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(1), (int)displacement);
             ctx.Pe.WriteRva(function.BeginRva, entry);
-            if (compiled.JunkSites != 0) ctx.MarkApplied(junkId, junk);
-            if (compiled.SplitConstants != 0) ctx.MarkApplied(mbaId, ProtectionLevel.Balanced);
+            if (compiled.JunkSites != 0) ctx.MarkApplied(function, junkId, junk);
+            if (compiled.SplitConstants != 0)
+                ctx.MarkApplied(function, mbaId, mba);
             ctx.Log.Add(new("native-code", $"rewrote {function.Name} at RVA {function.BeginRva:X8}: " +
                 $"{compiled.JunkSites} in-body junk sites, {compiled.SplitConstants} target constants split, " +
                 $"{compiled.FlagLiveConstants} MOV constants retained for live flags; {compiled.Code.Length} bytes"));

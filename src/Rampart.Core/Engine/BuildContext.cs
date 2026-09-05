@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.ObjectModel;
 using Rampart.Config;
 using Rampart.Pe;
 using Rampart.Symbols;
@@ -18,6 +19,10 @@ public sealed record FunctionTransformation(
 /// randomization: same seed ⇒ identical output; different seed ⇒ no shared bytes.</summary>
 public sealed class BuildContext
 {
+    private static readonly IReadOnlyDictionary<string, ProtectionLevel> NoProtections =
+        new ReadOnlyDictionary<string, ProtectionLevel>(
+            new Dictionary<string, ProtectionLevel>(StringComparer.Ordinal));
+
     public PeImage Pe { get; }
     public ProtectionSettings Settings { get; }
     public KnobCatalog Catalog { get; }
@@ -25,6 +30,7 @@ public sealed class BuildContext
     public List<BuildLogEntry> Log { get; } = [];
     private readonly Dictionary<string, ProtectionLevel> _applied = new(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, ProtectionLevel> Applied => _applied;
+    private readonly Dictionary<uint, Dictionary<string, ProtectionLevel>> _functionApplied = [];
     private readonly Dictionary<uint, FunctionTransformation> _functionTransformations = [];
     public IReadOnlyDictionary<uint, FunctionTransformation> FunctionTransformations => _functionTransformations;
 
@@ -108,6 +114,27 @@ public sealed class BuildContext
         if (!_applied.TryGetValue(knobId, out ProtectionLevel current) || level > current)
             _applied[knobId] = level;
     }
+
+    /// <summary>Records evidence that a protection changed one function. The
+    /// aggregate result is updated from the same evidence so both reports agree.</summary>
+    internal void MarkApplied(FunctionDescriptor function, string knobId, ProtectionLevel level)
+    {
+        MarkApplied(knobId, level);
+        if (level == ProtectionLevel.Off)
+            return;
+        if (!_functionApplied.TryGetValue(function.BeginRva, out var applied))
+        {
+            applied = new Dictionary<string, ProtectionLevel>(StringComparer.Ordinal);
+            _functionApplied.Add(function.BeginRva, applied);
+        }
+        if (!applied.TryGetValue(knobId, out ProtectionLevel current) || level > current)
+            applied[knobId] = level;
+    }
+
+    internal IReadOnlyDictionary<string, ProtectionLevel> AppliedTo(FunctionDescriptor function) =>
+        _functionApplied.TryGetValue(function.BeginRva, out var applied)
+            ? applied
+            : NoProtections;
 
     public void Analyze()
     {

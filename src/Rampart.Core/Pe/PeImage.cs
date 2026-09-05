@@ -16,6 +16,9 @@ public sealed class PeImage
     private byte[] _dosHeaderAndStub = [];   // everything before the PE signature
     private byte[] _optionalHeader = [];     // raw optional header (PE32+ = 240 bytes)
     private byte[] _overlay = [];            // bytes after the final section (assets/certificates)
+    private uint _originalCoffSymbolPointer;
+    private uint _originalCoffSymbolCount;
+    private long _originalOverlayStart;
 
     public MachineType Machine { get; set; }
     public ushort NumberOfSections { get; set; }
@@ -59,6 +62,14 @@ public sealed class PeImage
     public ushort DllCharacteristicsRaw { get => ReadU16InOptional(70); set => WriteU16InOptional(70, value); }
     public uint SizeOfImage { get => ReadU32InOptional(56); set => WriteU32InOptional(56, value); }
     public uint SizeOfHeaders { get => ReadU32InOptional(60); set => WriteU32InOptional(60, value); }
+    public uint Checksum { get => ReadU32InOptional(64); set => WriteU32InOptional(64, value); }
+
+    /// <summary>Image version identifies the build; OS/subsystem compatibility versions are separate fields.</summary>
+    public (ushort Major, ushort Minor) ImageVersion
+    {
+        get => (ReadU16InOptional(44), ReadU16InOptional(46));
+        set { WriteU16InOptional(44, value.Major); WriteU16InOptional(46, value.Minor); }
+    }
 
     /// <summary>Major/minor linker version (optional header bytes 2/3).</summary>
     public (byte Major, byte Minor) LinkerVersion
@@ -153,6 +164,8 @@ public sealed class PeImage
         pe.Machine = (MachineType)BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(fh));
         pe.NumberOfSections = BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(fh + 2));
         pe.TimeDateStamp = BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(fh + 4));
+        pe._originalCoffSymbolPointer = BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(fh + 8));
+        pe._originalCoffSymbolCount = BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(fh + 12));
         pe.SizeOfOptionalHeader = BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(fh + 16));
         pe.Characteristics = BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(fh + 18));
 
@@ -198,8 +211,31 @@ public sealed class PeImage
             pe.Sections.Count == 0 ? 0 : pe.Sections.Max(s => (long)s.PointerToRawData + s.SizeOfRawData));
         if (rawEnd < file.Length)
             pe._overlay = file[(int)rawEnd..];
+        pe._originalOverlayStart = rawEnd;
 
         return pe;
+    }
+
+    /// <summary>Clears original file-only COFF symbols and their length-prefixed
+    /// string table. Their overlay-relative location survives later section growth.</summary>
+    public int ScrubCoffSymbolPayload()
+    {
+        if (_originalCoffSymbolPointer == 0 && _originalCoffSymbolCount == 0) return 0;
+        if (_originalCoffSymbolPointer == 0 || _originalCoffSymbolCount > 1_000_000)
+            throw new BadImageFormatException("COFF symbol metadata has no file pointer or exceeds the supported count.");
+        long offset = _originalCoffSymbolPointer - _originalOverlayStart;
+        long symbolsSize = (long)_originalCoffSymbolCount * 18;
+        if (offset < 0)
+            throw new NotSupportedException("Maximum symbol scrub requires COFF symbol payloads outside mapped sections.");
+        if (offset + symbolsSize + 4 > _overlay.Length)
+            throw new BadImageFormatException("COFF symbol table extends beyond its file payload.");
+        uint stringsSize = BinaryPrimitives.ReadUInt32LittleEndian(_overlay.AsSpan((int)(offset + symbolsSize)));
+        if (stringsSize < 4 || offset + symbolsSize + stringsSize > _overlay.Length)
+            throw new BadImageFormatException("COFF string table has an invalid length.");
+        int size = checked((int)(symbolsSize + stringsSize));
+        _overlay.AsSpan((int)offset, size).Clear();
+        _originalCoffSymbolPointer = _originalCoffSymbolCount = 0;
+        return size;
     }
 
     // ---- RVA mapping ------------------------------------------------------------
@@ -236,6 +272,39 @@ public sealed class PeImage
         TryOffsetToRva(offset, out var rva)
             ? rva
             : throw new ArgumentOutOfRangeException(nameof(offset), $"File offset {offset:X8} is inside no section.");
+
+    /// <summary>Maps one contiguous file range to its mutable section or overlay
+    /// backing. Header bytes and unrepresented file gaps are intentionally not exposed.</summary>
+    internal bool TryGetFileRange(uint fileOffset, int length, out Memory<byte> range)
+    {
+        range = default;
+        if (length < 0)
+            return false;
+
+        ulong end = (ulong)fileOffset + (uint)length;
+        Section? section = Sections.FirstOrDefault(candidate =>
+            fileOffset >= candidate.PointerToRawData
+            && end <= (ulong)candidate.PointerToRawData + candidate.SizeOfRawData
+            && end <= (ulong)candidate.PointerToRawData + (uint)candidate.Data.Length);
+        if (section is not null)
+        {
+            range = section.Data.AsMemory(checked((int)(fileOffset - section.PointerToRawData)), length);
+            return true;
+        }
+
+        long overlayStart = Math.Max(
+            SizeOfHeaders,
+            Sections.Count == 0 ? 0 : Sections.Max(candidate =>
+                (long)candidate.PointerToRawData + candidate.SizeOfRawData));
+        if ((ulong)fileOffset < (ulong)overlayStart
+            || end > (ulong)overlayStart + (uint)_overlay.Length)
+        {
+            return false;
+        }
+
+        range = _overlay.AsMemory(checked((int)(fileOffset - (uint)overlayStart)), length);
+        return true;
+    }
 
     /// <summary>VA (ImageBase + RVA) → RVA.</summary>
     public uint VaToRva(ulong va) =>
@@ -311,6 +380,11 @@ public sealed class PeImage
         int tableBytes = (NumberOfSections + 1) * 40;
         EnsureSectionTableCapacity(checked(tableStart + tableBytes), fileAlign);
 
+        long overlayStartBeforeSection = Math.Max(
+            SizeOfHeaders,
+            Sections.Count == 0 ? 0 : Sections.Max(s =>
+                (long)s.PointerToRawData + s.SizeOfRawData));
+
         // Raw placement: end of file rounded up.
         uint rawEnd = Sections.Count > 0
             ? Sections.Max(s => s.PointerToRawData + s.SizeOfRawData)
@@ -339,6 +413,12 @@ public sealed class PeImage
 
         SizeOfImage = AlignUp(virtAddr + rawSize, sectAlign);
         long newOverlayStart = (long)rawPtr + rawSize;
+        if (_overlay.Length > 0 && newOverlayStart > overlayStartBeforeSection)
+        {
+            AdjustDebugRawPointers(
+                checked((uint)overlayStartBeforeSection),
+                checked((uint)(newOverlayStart - overlayStartBeforeSection)));
+        }
         if (!securityBefore.IsEmpty && securityBefore.RelativeVirtualAddress >= oldRawEnd)
         {
             uint adjusted = checked((uint)(securityBefore.RelativeVirtualAddress + (newOverlayStart - oldRawEnd)));
@@ -359,26 +439,34 @@ public sealed class PeImage
         // IMAGE_DEBUG_DIRECTORY stores a raw file pointer in addition to its
         // RVA. Adjust it before moving section file positions; RVA mappings and
         // section payloads themselves remain unchanged.
-        DataDirectory debug = Directory(DataDir.Debug);
-        if (!debug.IsEmpty && debug.Size >= 28)
-        {
-            int count = checked((int)(debug.Size / 28));
-            for (int i = 0; i < count; i++)
-            {
-                uint descriptorRva = debug.RelativeVirtualAddress + (uint)(i * 28);
-                byte[] descriptor = ReadRva(descriptorRva, 28);
-                uint rawPointer = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(24));
-                if (rawPointer >= oldHeaders && rawPointer != 0)
-                {
-                    BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(24), checked(rawPointer + delta));
-                    WriteRva(descriptorRva, descriptor);
-                }
-            }
-        }
+        AdjustDebugRawPointers(oldHeaders, delta);
 
         foreach (Section section in Sections.Where(section => section.PointerToRawData != 0))
             section.PointerToRawData = checked(section.PointerToRawData + delta);
         SizeOfHeaders = newHeaders;
+    }
+
+    private void AdjustDebugRawPointers(uint firstMovedOffset, uint delta)
+    {
+        if (delta == 0)
+            return;
+
+        DataDirectory debug = Directory(DataDir.Debug);
+        if (debug.IsEmpty || debug.Size < 28)
+            return;
+
+        int count = checked((int)(debug.Size / 28));
+        for (int i = 0; i < count; i++)
+        {
+            uint descriptorRva = debug.RelativeVirtualAddress + (uint)(i * 28);
+            byte[] descriptor = ReadRva(descriptorRva, 28);
+            uint rawPointer = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(24));
+            if (rawPointer < firstMovedOffset || rawPointer == 0)
+                continue;
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                descriptor.AsSpan(24), checked(rawPointer + delta));
+            WriteRva(descriptorRva, descriptor);
+        }
     }
 
     internal int DosAndNtHeaderSize => _dosHeaderAndStub.Length + 4 + 20;

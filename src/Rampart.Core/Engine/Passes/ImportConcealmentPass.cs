@@ -10,7 +10,8 @@ namespace Rampart.Engine.Passes;
 /// for module lifetime and for references outside the decoder's supported scope.</summary>
 public sealed class ImportConcealmentPass
 {
-    private sealed record Site(uint Rva, int Length, ImportedFunction Import);
+    private sealed record Site(
+        uint Rva, int Length, ImportedFunction Import, FunctionDescriptor Function);
 
     public void Run(BuildContext ctx)
     {
@@ -57,7 +58,7 @@ public sealed class ImportConcealmentPass
                         // a selected caller. Decoder gaps still retain the IAT.
                         addressSensitiveSlots.Add(imported.ThunkRva);
                     else if (selected)
-                        sites.Add(new(rva, instruction.Length, imported));
+                        sites.Add(new(rva, instruction.Length, imported, function));
                 }
                 pos += instruction.Length;
             }
@@ -87,11 +88,11 @@ public sealed class ImportConcealmentPass
             if (displacement is < int.MinValue or > int.MaxValue)
                 continue;
             ctx.Pe.WriteRva(site.Rva + (uint)site.Length - 4, BitConverter.GetBytes((int)displacement));
+            ctx.MarkApplied(site.Function, "packaging.import-concealment",
+                Config.ProtectionLevel.Light);
             rewritten++;
         }
         ctx.RegisterInit(init, $"hash import resolver ({imports.Count} functions, {rewritten} sites)");
-        if (rewritten > 0)
-            ctx.MarkApplied("packaging.import-concealment", Config.ProtectionLevel.Light);
         ctx.Log.Add(new("imports", $"seeded export-name lookup for {imports.Count} imports; {rewritten} references rewritten; " +
             "original descriptors, names and IAT retained; ordinals/API sets/unsupported references unchanged; loader fallback on lookup failure"));
     }

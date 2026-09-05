@@ -102,8 +102,10 @@ public static class LzssDecoderEmitter
         byte[] code = a.Assemble();
         BuildContext.PatchRipReferences(code, a, selfRva, new Dictionary<string, uint>
         {
-            ["input"] = inputRva, ["input_end"] = inputEnd,
-            ["output"] = outputRva, ["output_end"] = outputEnd,
+            ["input"] = inputRva,
+            ["input_end"] = inputEnd,
+            ["output"] = outputRva,
+            ["output_end"] = outputEnd,
         });
         return code;
 

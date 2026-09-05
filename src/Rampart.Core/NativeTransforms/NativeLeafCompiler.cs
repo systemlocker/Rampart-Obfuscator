@@ -1,9 +1,14 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using Rampart.X64;
 
 namespace Rampart.NativeTransforms;
 
-public sealed record NativeTransformOptions(int JunkDensity, bool SplitConstants);
+public sealed record NativeTransformOptions(int JunkDensity, bool SplitConstants)
+{
+    /// <summary>One reconstruction layer, two nested layers, or three/four varied layers.</summary>
+    public int ConstantDepth { get; init; } = 1;
+}
 public sealed record CompiledNativeLeaf(byte[] Code, int JunkSites, int SplitConstants, int FlagLiveConstants);
 
 /// <summary>
@@ -31,6 +36,8 @@ public static class NativeLeafCompiler
         reason = "";
         if (options.JunkDensity is < 0 or > 3)
             throw new ArgumentOutOfRangeException(nameof(options), "Native junk density must be 0..3.");
+        if (options.ConstantDepth is < 1 or > 3)
+            throw new ArgumentOutOfRangeException(nameof(options), "Constant depth must be 1..3.");
         if (source.Length is < 5 or > 512)
             return Fail("function size is outside the 5..512-byte limit", out reason);
 
@@ -119,7 +126,7 @@ public static class NativeLeafCompiler
                 }
                 else
                 {
-                    EmitConstant(asm, random, instruction);
+                    EmitConstant(asm, random, instruction, options.ConstantDepth);
                     constants++;
                 }
             }
@@ -134,16 +141,39 @@ public static class NativeLeafCompiler
         return true;
     }
 
-    private static void EmitConstant(Asm asm, Random random, Instruction instruction)
+    private static void EmitConstant(Asm asm, Random random, Instruction instruction, int depth)
     {
-        uint xorMask = (uint)random.NextInt64(1, 1L << 32);
-        uint addend = (uint)random.NextInt64(1, 1L << 32);
-        uint first = unchecked((instruction.Constant ^ xorMask) - addend);
-        // Mixed modular arithmetic and boolean reconstruction: (first+addend)^mask.
-        // Materialization never aliases a source-program register.
-        asm.Mov32Ri(Reg.R11, first);
-        asm.Db(0x41, 0x81, 0xC3).Dd(addend); // add r11d, addend
-        asm.Db(0x41, 0x81, 0xF3).Dd(xorMask); // xor r11d, mask
+        int count = depth == 3 ? 3 + random.Next(2) : depth;
+        var layers = new List<(uint Mask, uint Addend, int Rotate)>();
+        uint encoded = instruction.Constant;
+        for (int layer = 0; layer < count; layer++)
+        {
+            uint mask = (uint)random.NextInt64(1, 1L << 32);
+            uint addend = (uint)random.NextInt64(1, 1L << 32);
+            int rotate = depth == 3 && random.Next(2) != 0 ? random.Next(1, 32) : 0;
+            // Invert each layer while building, then emit them in reverse order.
+            // All arithmetic is modulo 2^32 and never aliases an application register.
+            encoded = rotate == 0 ? unchecked((encoded ^ mask) - addend)
+                : BitOperations.RotateRight(unchecked(encoded - addend), rotate) ^ mask;
+            layers.Add((mask, addend, rotate));
+        }
+        asm.Mov32Ri(Reg.R11, encoded);
+        foreach (var layer in layers.AsEnumerable().Reverse())
+        {
+            if (layer.Rotate == 0)
+            {
+                asm.Db(0x41, 0x81, 0xC3).Dd(layer.Addend); // add r11d, addend
+                asm.Db(0x41, 0x81, 0xF3).Dd(layer.Mask); // xor r11d, mask
+            }
+            else
+            {
+                asm.Db(0x41, 0x81, 0xF3).Dd(layer.Mask);
+                asm.Db(0x41, 0xC1, 0xC3, (byte)layer.Rotate); // rol r11d, count
+                asm.Db(0x41, 0x81, 0xC3).Dd(layer.Addend);
+            }
+        }
+        // The original operation runs last, restoring exactly its own EFLAGS.
+        // MOV materialization is allowed only when those flags are dead.
         asm.Db(0x44, instruction.RegisterOpcode, (byte)(0xD8 | instruction.ConstantRegister));
     }
 
@@ -189,8 +219,16 @@ public static class NativeLeafCompiler
             size = 5;
             flags = true;
             destination = 0;
-            registerOpcode = op switch { 0x05 => 0x01, 0x0D => 0x09, 0x25 => 0x21,
-                0x2D => 0x29, 0x35 => 0x31, 0x3D => 0x39, _ => 0x85 };
+            registerOpcode = op switch
+            {
+                0x05 => 0x01,
+                0x0D => 0x09,
+                0x25 => 0x21,
+                0x2D => 0x29,
+                0x35 => 0x31,
+                0x3D => 0x39,
+                _ => 0x85
+            };
         }
         else if (op is 0x01 or 0x03 or 0x09 or 0x0B or 0x21 or 0x23 or 0x29 or 0x2B
             or 0x31 or 0x33 or 0x39 or 0x3B or 0x85 or 0x89 or 0x8B)

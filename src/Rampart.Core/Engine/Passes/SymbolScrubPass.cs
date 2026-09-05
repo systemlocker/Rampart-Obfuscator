@@ -27,10 +27,27 @@ public sealed class SymbolScrubPass
                 var desc = pe.ReadRva(debugDir.RelativeVirtualAddress + (uint)(i * 28), 28);
                 uint sizeOfData = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(16));
                 uint addressOfRawData = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(20));
-                if (addressOfRawData != 0 && sizeOfData > 0 && sizeOfData < 0x100000)
+                uint pointerToRawData = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(24));
+                if (sizeOfData > 0 && sizeOfData < 0x100000)
                 {
-                    ZeroRva(pe, addressOfRawData, (int)sizeOfData);
-                    items++;
+                    bool cleared = false;
+                    if (addressOfRawData != 0
+                        && pe.TryRvaToOffset(addressOfRawData, out int payloadOffset)
+                        && pe.TryGetFileRange((uint)payloadOffset, (int)sizeOfData, out Memory<byte> payload))
+                    {
+                        payload.Span.Clear();
+                        cleared = true;
+                    }
+                    else if (pointerToRawData != 0
+                        && pe.TryGetFileRange(pointerToRawData, (int)sizeOfData, out payload))
+                    {
+                        // The PE format permits unmapped debug data at the end
+                        // of the file, represented only by PointerToRawData.
+                        payload.Span.Clear();
+                        cleared = true;
+                    }
+                    if (cleared)
+                        items++;
                 }
             }
             // Zero the descriptors themselves, then the directory entry.
@@ -60,21 +77,33 @@ public sealed class SymbolScrubPass
             }
         }
 
-        // Timestamps (header + export/import table clocks) at Heavy+. Disguised
-        // with build-random values rather than zeroed — a zero timestamp is
-        // itself a packer heuristic worth avoiding.
+        // Timestamps (header + export/import table clocks) at Heavy+. Give the
+        // COFF header a seeded value to avoid a zero-timestamp packer heuristic;
+        // clear each directory timestamp so stale binding metadata is not kept.
         if (level >= Config.ProtectionLevel.Heavy)
         {
             pe.TimeDateStamp = (uint)ctx.Rng.NextInt64(1, int.MaxValue);
-            foreach (var dirIndex in new[] { DataDir.Export, DataDir.Import })
+            var export = pe.Directory(DataDir.Export);
+            if (!export.IsEmpty && export.Size >= 8)
+                ZeroRva(pe, export.RelativeVirtualAddress + 4, 4);
+
+            var imports = pe.Directory(DataDir.Import);
+            for (uint offset = 0; !imports.IsEmpty && (ulong)offset + 20 <= imports.Size; offset += 20)
             {
-                var d = pe.Directory(dirIndex);
-                if (!d.IsEmpty)
-                    ZeroRva(pe, d.RelativeVirtualAddress + 4, 4); // TimeDateStamp fields
+                byte[] descriptor = pe.ReadRva(imports.RelativeVirtualAddress + offset, 20);
+                if (descriptor.All(value => value == 0))
+                    break;
+                ZeroRva(pe, imports.RelativeVirtualAddress + offset + 4, 4);
             }
             items++;
         }
 
+        if (level == Config.ProtectionLevel.Maximum)
+        {
+            int coffBytes = pe.ScrubCoffSymbolPayload();
+            if (coffBytes > 0) items++;
+            ctx.Log.Add(new("symbol-scrub", $"verified COFF payload ownership and cleared {coffBytes} symbol/string-table bytes"));
+        }
         ctx.Log.Add(new("symbol-scrub", $"scrubbed {items} items (level {level})"));
     }
 

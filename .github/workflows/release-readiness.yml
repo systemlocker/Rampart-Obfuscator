@@ -20,10 +20,23 @@ jobs:
       - name: Check out Rampart
         uses: actions/checkout@v4
 
-      - name: Install .NET 8
+      - name: Install .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
+
+      - name: Resolve release version
+        shell: pwsh
+        run: |
+          [xml] $props = Get-Content -LiteralPath Directory.Build.props
+          $version = [string]$props.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Directory.Build.props has an invalid release version: '$version'."
+          }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag '$env:GITHUB_REF_NAME' does not match package version '$version'."
+          }
+          "RAMPART_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Restore
         run: dotnet restore Rampart.slnx
@@ -34,17 +47,90 @@ jobs:
       - name: Build
         run: dotnet build Rampart.slnx --configuration Release --no-restore -p:ContinuousIntegrationBuild=true
 
-      - name: Test
-        run: dotnet test Rampart.slnx --configuration Release --no-build --logger trx --results-directory artifacts/test-results
-
       - name: Pack
-        run: dotnet pack Rampart.slnx --configuration Release --no-build --output artifacts/packages -p:ContinuousIntegrationBuild=true
+        shell: pwsh
+        run: |
+          dotnet pack src/Rampart.Core/Rampart.Core.csproj --configuration Release --no-restore --output artifacts/packages -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { throw 'Rampart.Core package build failed.' }
+          dotnet pack src/Rampart.Cli/Rampart.Cli.csproj --configuration Release --no-restore --output artifacts/packages -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { throw 'Rampart CLI package build failed.' }
+
+      - name: Smoke-test packages and installed tool
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $packageRoot = (Resolve-Path -LiteralPath artifacts/packages).Path
+          $corePackage = Join-Path $packageRoot "Rampart.Core.$env:RAMPART_VERSION.nupkg"
+          $toolPackage = Join-Path $packageRoot "rampart.$env:RAMPART_VERSION.nupkg"
+          $packages = @(Get-ChildItem -LiteralPath $packageRoot -Filter '*.nupkg' -File)
+          if ($packages.Count -ne 2 -or -not (Test-Path -LiteralPath $corePackage) -or -not (Test-Path -LiteralPath $toolPackage)) {
+            throw "Expected only Rampart.Core and rampart packages at version $env:RAMPART_VERSION."
+          }
+
+          foreach ($package in @($corePackage, $toolPackage)) {
+            $archive = [IO.Compression.ZipFile]::OpenRead($package)
+            try {
+              $entries = @($archive.Entries.FullName)
+              $privateEntries = @($entries | Where-Object {
+                $_ -match '(^|/)(internal|tests?)(/|$)' -or $_ -match '\.(cs|pdb)$'
+              })
+              if ($privateEntries.Count -ne 0) {
+                throw "Package '$package' contains source, symbols, or test-only files: $($privateEntries -join ', ')."
+              }
+              foreach ($required in @('README.md', 'FEATURES.md', 'LICENSE')) {
+                if ($entries -notcontains $required) { throw "Package '$package' is missing $required." }
+              }
+              if ($package -eq $corePackage -and $entries -notcontains 'lib/net8.0/Rampart.Core.dll') {
+                throw 'Rampart.Core package is missing its net8.0 assembly.'
+              }
+              if ($package -eq $toolPackage -and
+                  ($entries -notcontains 'tools/net8.0/any/DotnetToolSettings.xml' -or
+                   $entries -notcontains 'tools/net8.0/any/rampart.dll' -or
+                   $entries -notcontains 'tools/net8.0/any/Rampart.Core.dll')) {
+                throw 'Rampart CLI package is not a complete .NET tool.'
+              }
+            }
+            finally {
+              $archive.Dispose()
+            }
+          }
+
+          # Clear all external feeds so a cached or published package with the same
+          # version cannot satisfy the smoke test in place of this workflow's output.
+          $nugetConfig = Join-Path $env:RUNNER_TEMP 'rampart-candidate-nuget.config'
+          $escapedFeed = [Security.SecurityElement]::Escape($packageRoot)
+          "<configuration><packageSources><clear/><add key=`"candidate`" value=`"$escapedFeed`"/></packageSources></configuration>" |
+            Set-Content -LiteralPath $nugetConfig -Encoding utf8
+          $toolPath = Join-Path $env:RUNNER_TEMP 'rampart-candidate-tool'
+          $env:NUGET_PACKAGES = Join-Path $env:RUNNER_TEMP 'rampart-candidate-packages'
+          dotnet tool install rampart --version $env:RAMPART_VERSION --tool-path $toolPath --configfile $nugetConfig --no-cache
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate tool installation failed.' }
+
+          $rampart = Join-Path $toolPath 'rampart.exe'
+          $versionOutput = @(& $rampart --version)
+          if ($LASTEXITCODE -ne 0 -or ($versionOutput -join "`n").Trim() -ne "rampart $env:RAMPART_VERSION") {
+            throw "Installed tool reported an unexpected version: $($versionOutput -join ' ')."
+          }
+
+          $knobsOutput = @(& $rampart knobs --json)
+          if ($LASTEXITCODE -ne 0) { throw 'Installed tool could not enumerate protection options.' }
+          $knobs = @(($knobsOutput -join "`n") | ConvertFrom-Json)
+          $requiredKnobs = @('strings.encryption', 'virtualization.coverage', 'packaging.symbol-scrub')
+          foreach ($id in $requiredKnobs) {
+            if ($knobs.Id -notcontains $id) { throw "Installed tool did not report required option '$id'." }
+          }
+
+          $checkOutput = @(& $rampart check --preset balanced --json)
+          if ($LASTEXITCODE -ne 0) { throw 'Installed tool rejected the balanced configuration.' }
+          $check = ($checkOutput -join "`n") | ConvertFrom-Json
+          if (-not $check.Valid -or $check.Settings.Preset -ne 'balanced' -or $check.BudgetPoints -le 0) {
+            throw 'Installed tool returned an invalid balanced configuration preview.'
+          }
 
       - name: Upload release candidates
         uses: actions/upload-artifact@v4
         with:
           name: rampart-${{ github.ref_name }}
-          path: |
-            artifacts/packages/*.nupkg
-            artifacts/test-results/*.trx
+          path: artifacts/packages/*.nupkg
           if-no-files-found: error

@@ -36,6 +36,8 @@ public static class Presets
             // narrow input contracts. A preset cannot establish those contracts.
             "packaging.packer" or "code-transformation.flattening"
                 or "virtualization.per-build-isa" or "virtualization.coverage"
+                or "virtualization.extended-isa" or "virtualization.handler-polymorphism" or "virtualization.vm-nesting"
+                or "virtualization.runtime-rekey"
                 => ProtectionLevel.Off,
             // Keep runtime-sensitive and disabled compatibility options out of
             // general-purpose presets.
@@ -70,6 +72,9 @@ public static class Presets
     {
         "packaging.packer" or "code-transformation.flattening"
             or "virtualization.per-build-isa" or "virtualization.coverage"
+            or "virtualization.extended-isa" or "virtualization.handler-polymorphism" or "virtualization.vm-nesting"
+            or "virtualization.runtime-rekey"
+            or "nuclear.nanomites" or "nuclear.exception-flow"
             => ProtectionLevel.Off,
         _ => ProtectionLevel.Maximum,
     };

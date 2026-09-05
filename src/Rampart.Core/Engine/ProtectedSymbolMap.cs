@@ -5,7 +5,7 @@ namespace Rampart.Engine;
 /// <summary>Private build sidecar. This document is never embedded in the PE.</summary>
 public sealed class ProtectedSymbolMap
 {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 2;
     public required long Seed { get; init; }
     public required ulong ImageBase { get; init; }
     public required string InputSha256 { get; init; }
@@ -27,5 +27,10 @@ public sealed class ProtectedSymbolMapEntry
     public string? Module { get; init; }
     public string? Section { get; init; }
     public string? Source { get; init; }
+    /// <summary>Protections supported by evidence emitted during this build.</summary>
     public required IReadOnlyDictionary<string, ProtectionLevel> Applied { get; init; }
+    /// <summary>Effective policy after global settings and function rules. Kept
+    /// separate because an ineligible or already-owned function may be skipped.</summary>
+    public IReadOnlyDictionary<string, ProtectionLevel> Requested { get; init; } =
+        new Dictionary<string, ProtectionLevel>(StringComparer.Ordinal);
 }
