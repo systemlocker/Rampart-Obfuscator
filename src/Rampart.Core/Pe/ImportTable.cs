@@ -8,36 +8,48 @@ public sealed record ImportedFunction(string Dll, string Name, uint Hint, uint T
 /// rebuild hash-resolved imports and to find thunks worth re-routing.</summary>
 public static class ImportTable
 {
+    private const int MaximumThunkCount = 65_536;
+
     public static List<ImportedFunction> Parse(PeImage pe)
     {
         var result = new List<ImportedFunction>();
         var dir = pe.Directory(DataDir.Import);
         if (dir.IsEmpty)
             return result;
+        if (dir.RelativeVirtualAddress == 0 || dir.Size < 20)
+            throw new BadImageFormatException("Import directory is present but smaller than one descriptor.");
 
-        uint descRva = dir.RelativeVirtualAddress;
-        while (true)
+        int descriptorCount = checked((int)(dir.Size / 20));
+        for (int descriptorIndex = 0; descriptorIndex < descriptorCount; descriptorIndex++)
         {
+            uint descRva = checked(dir.RelativeVirtualAddress + (uint)(descriptorIndex * 20));
             var desc = pe.ReadRva(descRva, 20);
             uint originalFirstThunk = BinaryPrimitives.ReadUInt32LittleEndian(desc);
             uint nameRva = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(12));
             uint firstThunk = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(16));
             if (originalFirstThunk == 0 && nameRva == 0 && firstThunk == 0)
-                break;
+                return result;
+            if (nameRva == 0 || firstThunk == 0)
+                throw new BadImageFormatException("Import descriptor is missing its DLL name or first thunk.");
 
             string dll = pe.ReadCString(nameRva);
             uint thunk = originalFirstThunk != 0 ? originalFirstThunk : firstThunk;
-            int index = 0;
-            while (true)
+            bool terminated = false;
+            for (int index = 0; index < MaximumThunkCount; index++)
             {
+                uint stride = pe.IsPe32Plus ? 8u : 4u;
+                uint entryRva = checked(thunk + (uint)index * stride);
                 ulong entry = pe.IsPe32Plus
-                    ? pe.ReadU64(thunk + (uint)(index * 8))
-                    : pe.ReadU32(thunk + (uint)(index * 4));
+                    ? pe.ReadU64(entryRva)
+                    : pe.ReadU32(entryRva);
 
                 if (entry == 0)
+                {
+                    terminated = true;
                     break;
+                }
 
-                uint thunkRva = firstThunk + (uint)(index * (pe.IsPe32Plus ? 8 : 4));
+                uint thunkRva = checked(firstThunk + (uint)index * stride);
                 if ((entry & (pe.IsPe32Plus ? 0x8000000000000000UL : 0x80000000UL)) != 0)
                 {
                     uint ordinal = (uint)(entry & 0xFFFF);
@@ -53,11 +65,11 @@ public static class ImportTable
                     string fname = pe.ReadCString(checked(hintNameRva + 2));
                     result.Add(new ImportedFunction(dll, fname, hint, thunkRva));
                 }
-                index++;
             }
-            descRva += 20;
+            if (!terminated)
+                throw new BadImageFormatException($"Import thunk array for '{dll}' exceeds {MaximumThunkCount} entries.");
         }
-        return result;
+        throw new BadImageFormatException("Import directory has no terminating descriptor within its declared size.");
     }
 
     /// <summary>Case-insensitive DLL group with canonical kernel32 entries the

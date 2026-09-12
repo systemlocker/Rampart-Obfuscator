@@ -68,12 +68,12 @@ The Windows x64 archive includes the .NET runtime. Extract the archive, then run
 To install the .NET tool with the .NET 8 SDK or newer:
 
 ```powershell
-dotnet tool install --global rampart --version 0.1.0
+dotnet tool install --global rampart --version 0.2.0
 rampart --version
 ```
 
 The `Rampart.Core` NuGet package provides the transformation engine for .NET 8
-applications. Add it with `dotnet add package Rampart.Core --version 0.1.0`.
+applications. Add it with `dotnet add package Rampart.Core --version 0.2.0`.
 
 ## Build
 
@@ -149,7 +149,9 @@ that turns off a required dependency also fails validation with an explanation.
 Levels are `off`, `light`, `balanced`, `heavy`, and `maximum`. Unsupported settings
 and levels fail validation instead of being reported as applied.
 Configuration JSON emitted by `--dry-run --json` can be loaded with
-`--config <file>`.
+`--config <file>`. Configuration property names are case-insensitive, while
+unknown properties and null required collections are rejected so a typo cannot
+silently fall back to a preset default.
 
 ### Function and region policies
 

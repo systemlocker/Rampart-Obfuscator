@@ -43,7 +43,8 @@ public sealed class PeImage
         public byte[] Data = [];
 
         public uint ResolvedVirtualSize => Math.Max(VirtualSize, SizeOfRawData);
-        public bool ContainsRva(uint rva) => rva >= VirtualAddress && rva < VirtualAddress + ResolvedVirtualSize;
+        public bool ContainsRva(uint rva) => rva >= VirtualAddress
+            && (ulong)rva - VirtualAddress < ResolvedVirtualSize;
         public bool IsExecutable => (Characteristics & SectionCharacteristics.MemExecute) != 0;
 
         public override string ToString() => $"{Name} @ RVA {VirtualAddress:X8} VS {VirtualSize:X8} RAW {SizeOfRawData:X8}@{PointerToRawData:X8}";
@@ -63,6 +64,11 @@ public sealed class PeImage
     public uint SizeOfImage { get => ReadU32InOptional(56); set => WriteU32InOptional(56, value); }
     public uint SizeOfHeaders { get => ReadU32InOptional(60); set => WriteU32InOptional(60, value); }
     public uint Checksum { get => ReadU32InOptional(64); set => WriteU32InOptional(64, value); }
+    public uint NumberOfRvaAndSizes
+    {
+        get => ReadU32InOptional(IsPe32Plus ? 108 : 92);
+        private set => WriteU32InOptional(IsPe32Plus ? 108 : 92, value);
+    }
 
     /// <summary>Image version identifies the build; OS/subsystem compatibility versions are separate fields.</summary>
     public (ushort Major, ushort Minor) ImageVersion
@@ -94,13 +100,31 @@ public sealed class PeImage
 
     public DataDirectory Directory(int index)
     {
+        if (index < 0)
+            throw new ArgumentOutOfRangeException(nameof(index));
+        if ((uint)index >= NumberOfRvaAndSizes)
+            return new DataDirectory(0, 0);
         var off = DataDirectoryOffset(index);
+        if (off > _optionalHeader.Length - 8)
+            throw new BadImageFormatException("Data-directory count exceeds the optional header.");
         return new DataDirectory(ReadU32InOptional(off), ReadU32InOptional(off + 4));
     }
 
     public void SetDirectory(int index, uint rva, uint size)
     {
+        if (index < 0)
+            throw new ArgumentOutOfRangeException(nameof(index));
         var off = DataDirectoryOffset(index);
+        if (off > _optionalHeader.Length - 8)
+            throw new NotSupportedException("The optional header has no storage for that data directory.");
+        if ((uint)index >= NumberOfRvaAndSizes)
+        {
+            // Raising the declared count exposes every intervening directory to
+            // the loader, so clear those previously out-of-contract bytes first.
+            int first = DataDirectoryOffset(checked((int)NumberOfRvaAndSizes));
+            _optionalHeader.AsSpan(first, off + 8 - first).Clear();
+            NumberOfRvaAndSizes = checked((uint)index + 1);
+        }
         WriteU32InOptional(off, rva);
         WriteU32InOptional(off + 4, size);
     }
@@ -172,14 +196,27 @@ public sealed class PeImage
         int oh = fh + 20;
         if (pe.SizeOfOptionalHeader == 0)
             throw new BadImageFormatException("No optional header (object file?).");
+        if (oh > file.Length - pe.SizeOfOptionalHeader)
+            throw new BadImageFormatException("Optional header truncated.");
         pe._optionalHeader = file[oh..(oh + pe.SizeOfOptionalHeader)];
 
+        if (pe._optionalHeader.Length < 2)
+            throw new BadImageFormatException("Optional header is too small to contain its magic.");
         if (pe.OptionalMagic is not (MagicPe32Plus or MagicPe32))
             throw new BadImageFormatException($"Unknown optional header magic {pe.OptionalMagic:X}.");
+        int fixedOptionalSize = pe.IsPe32Plus ? 112 : 96;
+        if (pe._optionalHeader.Length < fixedOptionalSize)
+            throw new BadImageFormatException("Optional header is truncated before the data directories.");
+        int availableDirectories = (pe._optionalHeader.Length - fixedOptionalSize) / 8;
+        if (pe.NumberOfRvaAndSizes > availableDirectories)
+            throw new BadImageFormatException("Data-directory count exceeds the optional header.");
 
         int st = oh + pe.SizeOfOptionalHeader;
-        if (st + pe.NumberOfSections * 40 > file.Length)
+        int sectionTableBytes = pe.NumberOfSections * 40;
+        if (st > file.Length - sectionTableBytes)
             throw new BadImageFormatException("Section table truncated.");
+        if (pe.SizeOfHeaders < st + sectionTableBytes || pe.SizeOfHeaders > file.Length)
+            throw new BadImageFormatException("SizeOfHeaders does not contain the complete PE headers.");
 
         for (int i = 0; i < pe.NumberOfSections; i++)
         {
@@ -195,9 +232,10 @@ public sealed class PeImage
             };
             if (sec.SizeOfRawData > 0)
             {
-                if (sec.PointerToRawData + sec.SizeOfRawData > (uint)file.Length)
+                ulong sectionEnd = (ulong)sec.PointerToRawData + sec.SizeOfRawData;
+                if (sectionEnd > (uint)file.Length)
                     throw new BadImageFormatException($"Section '{sec.Name}' raw data out of range.");
-                sec.Data = file[(int)sec.PointerToRawData..(int)(sec.PointerToRawData + sec.SizeOfRawData)];
+                sec.Data = file[(int)sec.PointerToRawData..(int)sectionEnd];
             }
             else
             {
@@ -248,7 +286,10 @@ public sealed class PeImage
         var sec = SectionFromRva(rva);
         if (sec is null || rva - sec.VirtualAddress >= sec.SizeOfRawData)
             return false;
-        offset = (int)(sec.PointerToRawData + (rva - sec.VirtualAddress));
+        ulong fileOffset = (ulong)sec.PointerToRawData + (rva - sec.VirtualAddress);
+        if (fileOffset > int.MaxValue)
+            return false;
+        offset = (int)fileOffset;
         return true;
     }
 
@@ -260,8 +301,11 @@ public sealed class PeImage
     public bool TryOffsetToRva(int offset, out uint rva)
     {
         rva = 0;
+        if (offset < 0)
+            return false;
         var sec = Sections.FirstOrDefault(s =>
-            offset >= s.PointerToRawData && offset < s.PointerToRawData + s.SizeOfRawData);
+            (ulong)offset >= s.PointerToRawData
+            && (ulong)offset < (ulong)s.PointerToRawData + s.SizeOfRawData);
         if (sec is null)
             return false;
         rva = sec.VirtualAddress + (uint)(offset - sec.PointerToRawData);
@@ -316,13 +360,15 @@ public sealed class PeImage
 
     public byte[] ReadRva(uint rva, int length)
     {
+        if (length < 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
         var result = new byte[length];
         int done = 0;
         while (done < length)
         {
             // RvaToOffset pins us to one section's raw window; copy what fits
             // there, clamped to the remaining request.
-            uint at = rva + (uint)done;
+            uint at = checked(rva + (uint)done);
             int off = RvaToOffset(at);
             var sec = SectionFromRva(at)!;
             int avail = Math.Min(length - done,
@@ -340,7 +386,10 @@ public sealed class PeImage
     {
         int off = RvaToOffset(rva);
         var sec = SectionFromRva(rva)!;
-        data.CopyTo(sec.Data.AsSpan(off - (int)sec.PointerToRawData));
+        int sectionOffset = checked(off - (int)sec.PointerToRawData);
+        if (data.Length > sec.Data.Length - sectionOffset)
+            throw new ArgumentOutOfRangeException(nameof(data), "Write extends beyond the section's raw data.");
+        data.CopyTo(sec.Data.AsSpan(sectionOffset));
     }
 
     /// <summary>Reads a NUL-terminated ASCII/UTF-8 string at an RVA.</summary>
@@ -351,7 +400,7 @@ public sealed class PeImage
         var span = sec.Data.AsSpan(off - (int)sec.PointerToRawData);
         int len = span.IndexOf((byte)0);
         if (len < 0)
-            len = span.Length;
+            throw new BadImageFormatException($"String at RVA {rva:X8} is not NUL-terminated in its section.");
         return Encoding.UTF8.GetString(span[..len]);
     }
 
@@ -365,6 +414,8 @@ public sealed class PeImage
     {
         if (name.Length > 8)
             throw new ArgumentException("Section name limited to 8 bytes.", nameof(name));
+        if (virtualSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualSize), "Section size must be positive.");
 
         uint fileAlign = FileAlignment;
         uint sectAlign = SectionAlignment;
@@ -472,7 +523,9 @@ public sealed class PeImage
     internal int DosAndNtHeaderSize => _dosHeaderAndStub.Length + 4 + 20;
 
     public static uint AlignUp(uint value, uint alignment) =>
-        (value + alignment - 1) / alignment * alignment;
+        alignment == 0
+            ? throw new ArgumentOutOfRangeException(nameof(alignment))
+            : checked((uint)(((ulong)value + alignment - 1) / alignment * alignment));
 
     // ---- Serialization ---------------------------------------------------------
 
@@ -485,6 +538,8 @@ public sealed class PeImage
             SizeOfHeaders,
             Sections.Count == 0 ? 0 : Sections.Max(s => (long)s.PointerToRawData + s.SizeOfRawData));
         long fileSize = sectionEnd + _overlay.Length;
+        if (fileSize > int.MaxValue)
+            throw new InvalidOperationException("PE image exceeds the maximum in-memory file size.");
         var out_ = new byte[fileSize];
 
         _dosHeaderAndStub.CopyTo(out_, 0);

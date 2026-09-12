@@ -67,6 +67,7 @@ public static class ProtectionSettingsJson
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         Converters = { new JsonStringEnumConverter() },
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
@@ -78,13 +79,49 @@ public static class ProtectionSettingsJson
     {
         using var document = JsonDocument.Parse(json);
         JsonElement root = document.RootElement;
-        if (root.ValueKind == JsonValueKind.Object
-            && root.TryGetProperty("Settings", out JsonElement nested))
-        {
-            root = nested;
-        }
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new FormatException("Protection settings must be a JSON object.");
 
-        return root.Deserialize<ProtectionSettings>(Options)
+        JsonElement? nested = null;
+        foreach (JsonProperty property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "Settings", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (nested is not null)
+                throw new FormatException("Protection settings wrapper contains more than one Settings property.");
+            nested = property.Value;
+        }
+        if (nested is { } wrapped)
+            root = wrapped.ValueKind == JsonValueKind.Object
+                ? wrapped
+                : throw new FormatException("Protection settings wrapper property 'Settings' must be an object.");
+
+        ProtectionSettings settings = root.Deserialize<ProtectionSettings>(Options)
             ?? throw new FormatException("Empty protection settings document.");
+        ValidateRequiredValues(settings);
+        return settings;
+    }
+
+    private static void ValidateRequiredValues(ProtectionSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.Preset))
+            throw new FormatException("Protection settings property 'Preset' must be a non-empty string.");
+        if (settings.Knobs is null || settings.ThreatFocus is null || settings.SymbolSources is null
+            || settings.IncludeSymbols is null || settings.ExcludeSymbols is null
+            || settings.IncludeRvaRanges is null || settings.Rules is null)
+        {
+            throw new FormatException("Protection settings collection properties cannot be null.");
+        }
+        if (settings.IncludeRvaRanges.Any(range => range is null))
+            throw new FormatException("Protection settings RVA ranges cannot contain null entries.");
+        if (settings.Rules.Any(rule => rule is null || rule.Knobs is null))
+            throw new FormatException("Protection settings rules and their Knobs collections cannot be null.");
+        if (settings.ThreatFocus.Any(value => value is null)
+            || settings.SymbolSources.Any(value => value is null)
+            || settings.IncludeSymbols.Any(value => value is null)
+            || settings.ExcludeSymbols.Any(value => value is null))
+        {
+            throw new FormatException("Protection settings string collections cannot contain null entries.");
+        }
     }
 }

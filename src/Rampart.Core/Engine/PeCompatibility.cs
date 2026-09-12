@@ -15,12 +15,12 @@ public static class PeCompatibility
         if (pe.Machine != MachineType.Amd64 || !pe.IsPe32Plus)
         {
             throw new NotSupportedException(
-                $"Rampart 0.1 protects PE32+ x64 images only (input is {pe.Machine}, " +
+                $"Rampart protects PE32+ x64 images only (input is {pe.Machine}, " +
                 $"magic 0x{pe.OptionalMagic:X}).");
         }
 
         if ((pe.Characteristics & ImageFileDll) != 0)
-            throw new NotSupportedException("Rampart 0.1 protects executable images, not DLLs.");
+            throw new NotSupportedException("Rampart protects executable images, not DLLs.");
 
         if (!pe.Directory(DataDir.ComDescriptor).IsEmpty)
             throw new NotSupportedException("Managed .NET images are not supported by the native x64 pipeline.");

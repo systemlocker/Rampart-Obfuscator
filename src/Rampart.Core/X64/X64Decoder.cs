@@ -51,18 +51,25 @@ public static class X64Decoder
         int i = offset;
         bool rexW = false, opSize66 = false, addrSize67 = false;
 
-        // Prefixes. REX must directly precede the opcode; track the main ones.
+        // Prefixes. A legacy prefix after REX makes that earlier REX ineffective;
+        // accepting it as still active can turn a 16/32-bit immediate into imm64.
         while (i < code.Length)
         {
             byte b = code[i];
             if (b is 0xF0 or 0xF2 or 0xF3 or 0x2E or 0x36 or 0x3E or 0x26 or 0x64 or 0x65)
             {
+                rexW = false;
                 i++;
             }
-            else if (b == 0x66) { opSize66 = true; i++; }
-            else if (b == 0x67) { addrSize67 = true; i++; }
+            else if (b == 0x66) { rexW = false; opSize66 = true; i++; }
+            else if (b == 0x67) { rexW = false; addrSize67 = true; i++; }
             else if (b >= 0x40 && b <= 0x4F) { rexW = (b & 8) != 0; i++; }
             else break;
+
+            // Architectural x86 instructions are at most 15 bytes including
+            // prefixes. Stop malformed prefix trains before reading an opcode.
+            if (i - offset >= 15)
+                return false;
         }
         if (i >= code.Length)
             return false;
@@ -87,16 +94,17 @@ public static class X64Decoder
 
             hasModRm = op2 switch
             {
-                <= 0x0D or 0x18 or 0x1A or 0x1C or 0x1E or 0x0F or 0x05 or 0x06 or 0x07
-                    or 0x08 or 0x09 or 0x0A or 0x0B or 0xA0 or 0xA1 or 0xA2 or 0xA8
-                    or 0xA9 or 0xC8 or 0xC9 or 0xCA or 0xCB or 0xCC or 0xCD or 0xCE
-                    or 0xCF => false,
+                0x05 or 0x06 or 0x07 or 0x08 or 0x09 or 0x0B
+                    or >= 0x30 and <= 0x35 or 0x37 or 0x77
+                    or >= 0x80 and <= 0x8F
+                    or 0xA0 or 0xA1 or 0xA2 or 0xA8 or 0xA9 or 0xAA
+                    or >= 0xC8 and <= 0xCF => false,
                 _ => true,
             };
             immSize = op2 switch
             {
-                0x70 or 0x71 or 0x72 or 0x73 or 0xA4 or 0xAC or 0xBA or 0xC2
-                    or 0xC6 or 0xC7 => 1,          // shuffles/shifts/comps with imm8
+                0x0F or 0x70 or 0x71 or 0x72 or 0x73 or 0xA4 or 0xAC or 0xBA
+                    or 0xC2 or 0xC4 or 0xC5 or 0xC6 => 1, // 3DNow/shuffles/shifts/comps
                 >= 0x80 and <= 0x8F => 4,          // jcc rel32
                 _ => 0,
             };
@@ -105,9 +113,17 @@ public static class X64Decoder
                 mnemonic = X64Mnemonic.JccRel;
             else if (op2 == 0x1E) // endbr64 etc. — treat as plain
                 mnemonic = X64Mnemonic.Nop;
+            else if (op2 == 0x0B)
+                mnemonic = X64Mnemonic.Ud2;
         }
         else
         {
+            // These bytes introduce VEX/EVEX encodings in 64-bit mode. Their
+            // instruction maps are intentionally outside this conservative
+            // decoder; consuming just the prefix would desynchronize the scan.
+            if (op is 0x62 or 0xC4 or 0xC5)
+                return false;
+
             hasModRm = op switch
             {
                 <= 0x05 => false,
@@ -119,22 +135,19 @@ public static class X64Decoder
                 >= 0x50 and <= 0x5F => false,
                 0x60 or 0x61 or 0x62 or 0x63 => op == 0x63, // 60-62 invalid, 63 movsxd has modrm
                 0x68 or 0x69 or 0x6A or 0x6B => op == 0x69 || op == 0x6B,
+                >= 0x6C and <= 0x6F => false,
                 >= 0x70 and <= 0x7F => false,
                 0x82 or 0x84 or 0x85 or 0x86 or 0x87 or 0x88 or 0x89 or 0x8A or 0x8B
                     or 0x8C or 0x8D or 0x8E or 0x8F => op != 0x82,
-                0x90 or 0x98 or 0x99 or 0x9B or 0x9C or 0x9D or 0x9E or 0x9F => false,
-                0xA4 or 0xA5 or 0xA6 or 0xA7 or 0xAA or 0xAB or 0xAC or 0xAD
-                    or 0xAE or 0xAF => false,
-                0xB0 or 0xB1 or 0xB2 or 0xB3 or 0xB4 or 0xB5 or 0xB6 or 0xB7 => false,
-                0xBE or 0xBF => false, // pause/ilenx not real — B0-BF handled below
+                >= 0x90 and <= 0x9F => false,
+                >= 0xA0 and <= 0xAF => false,
+                >= 0xB0 and <= 0xBF => false,
                 0xC0 or 0xC1 or 0xC2 or 0xC3 or 0xC4 or 0xC5 or 0xC6 or 0xC7 or 0xC8
                     or 0xC9 or 0xCA or 0xCB or 0xCC or 0xCD or 0xCE or 0xCF => op is 0xC0 or 0xC1 or 0xC6 or 0xC7,
                 0xD0 or 0xD1 or 0xD2 or 0xD3 => true,
                 0xD4 or 0xD5 or 0xD6 or 0xD7 => false,
                 >= 0xD8 and <= 0xDF => true,
-                0xE0 or 0xE1 or 0xE2 or 0xE3 => false,
-                0xE4 or 0xE5 or 0xE6 or 0xE7 or 0xE8 or 0xE9 or 0xEA or 0xEB => op is 0xE8 or 0xE9 or 0xEB,
-                0xEC or 0xED or 0xEE or 0xEF => false,
+                >= 0xE0 and <= 0xEF => false,
                 0xF4 or 0xF5 or 0xF8 or 0xF9 or 0xFA or 0xFB or 0xFC or 0xFD => false,
                 0xFE or 0xFF => true,
                 0xF6 or 0xF7 => true,
@@ -149,7 +162,8 @@ public static class X64Decoder
                     or 0xB7 or 0xC0 or 0xC1 or 0xCD or 0xE4 or 0xE5 or 0xE6 or 0xE7 => 1,
                 0x05 or 0x0D or 0x15 or 0x1D or 0x25 or 0x2D or 0x35 or 0x3D or 0x69
                     or 0xA9 => opSize66 ? 2 : 4,
-                0x68 => 4,
+                0x68 => opSize66 ? 2 : 4,
+                0x6B => 1,
                 0x80 or 0x83 or 0xC6 => 1,
                 0x81 or 0xC7 => opSize66 ? 2 : 4,
                 >= 0xB8 and <= 0xBF => rexW ? 8 : (opSize66 ? 2 : 4),
@@ -219,7 +233,7 @@ public static class X64Decoder
         }
 
         int total = afterOpcode + immSize - offset;
-        if (offset + total > code.Length)
+        if (total > 15 || offset + total > code.Length)
             return false;
 
         // The F6/F7 TEST special case: only reg-field 0/1 carries an immediate.
@@ -232,7 +246,7 @@ public static class X64Decoder
             {
                 int extra = op == 0xF6 ? 1 : (opSize66 ? 2 : 4);
                 total += extra;
-                if (offset + total > code.Length)
+                if (total > 15 || offset + total > code.Length)
                     return false;
                 immSize = extra;
             }
