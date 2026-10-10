@@ -21,12 +21,16 @@
     <None Include="build/Rampart.MSBuild.targets" Pack="true" PackagePath="build/" />
   </ItemGroup>
   <Target Name="IncludeTaskAndWorker" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <PropertyGroup>
+      <!-- PublishDir is evaluated by the child project, so make the parent-owned staging path absolute. -->
+      <_RampartWorkerPublishDirectory>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)worker/', '$(MSBuildProjectDirectory)'))</_RampartWorkerPublishDirectory>
+    </PropertyGroup>
     <MSBuild Projects="../Rampart.Cli/Rampart.Cli.csproj" Targets="Publish"
-             Properties="Configuration=$(Configuration);PublishDir=$(IntermediateOutputPath)worker/;DebugType=None;DebugSymbols=false" />
+             Properties="Configuration=$(Configuration);PublishDir=$(_RampartWorkerPublishDirectory);DebugType=None;DebugSymbols=false" />
     <ItemGroup>
       <None Include="$(TargetDir)*.dll" Pack="true" PackagePath="tasks/net8.0/" />
-      <None Include="$(IntermediateOutputPath)worker/**/*.dll;$(IntermediateOutputPath)worker/**/*.json"
-            Exclude="$(IntermediateOutputPath)worker/**/*.pdb" Pack="true" PackagePath="tools/net8.0/" />
+      <None Include="$(_RampartWorkerPublishDirectory)**/*.dll;$(_RampartWorkerPublishDirectory)**/*.json"
+            Exclude="$(_RampartWorkerPublishDirectory)**/*.pdb" Pack="true" PackagePath="tools/net8.0/" />
     </ItemGroup>
   </Target>
 </Project>

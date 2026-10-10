@@ -76,12 +76,12 @@ The Windows x64 archive includes the .NET runtime. Extract the archive, then run
 To install the .NET tool with the .NET 8 SDK or newer:
 
 ```powershell
-dotnet tool install --global rampart --version 0.3.0
+dotnet tool install --global rampart --version 0.3.1
 rampart --version
 ```
 
 The `Rampart.Core` NuGet package provides the transformation engine for .NET 8
-applications. Add it with `dotnet add package Rampart.Core --version 0.3.0`.
+applications. Add it with `dotnet add package Rampart.Core --version 0.3.1`.
 `Rampart.MSBuild` provides disabled-by-default publish integration; reference it
 with `PrivateAssets="all"` at the same version as the tool.
 
@@ -154,7 +154,7 @@ Add the package and enable it only for the publish configurations you have teste
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Rampart.MSBuild" Version="0.3.0" PrivateAssets="all" />
+  <PackageReference Include="Rampart.MSBuild" Version="0.3.1" PrivateAssets="all" />
 </ItemGroup>
 
 <PropertyGroup>
