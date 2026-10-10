@@ -3,6 +3,8 @@ using System.Text.Json;
 using Rampart.Config;
 using Rampart.Engine;
 using Rampart.Pe;
+using Rampart.Targets;
+using Rampart.NativeAot;
 
 namespace Rampart.Cli;
 
@@ -22,7 +24,34 @@ internal static class InspectCommand
             throw new ArgumentException("inspect requires exactly one PE file.");
 
         string path = Path.GetFullPath(positional[0]);
-        byte[] bytes = File.ReadAllBytes(path);
+        byte[] bytes = ProtectionPipeline.ReadInput(path);
+        var classification = TargetClassifier.Classify(bytes, path);
+        if (classification.Target.Kind != ProtectionTargetKind.NativePe)
+        {
+            object? audit = classification.Target.Kind == ProtectionTargetKind.NativeAot && classification.CanProtect
+                ? new NativeAotBackend().Audit(bytes, new ProtectionSettings { Seed = 0 }) : null;
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    Path = path,
+                    Size = bytes.Length,
+                    Sha256 = Convert.ToHexString(SHA256.HashData(bytes)),
+                    Classification = classification,
+                    NativeAotAudit = audit,
+                }, ProtectionSettingsJson.Options));
+            }
+            else
+            {
+                Console.WriteLine($"target:      {classification.Target.Kind}");
+                Console.WriteLine($"disposition: {classification.Disposition}");
+                Console.WriteLine($"reason:      {classification.ReasonCode}");
+                foreach (string evidence in classification.Evidence) Console.WriteLine($"  {evidence}");
+                if (classification.Target.Kind is ProtectionTargetKind.FrameworkDependentAppHost or ProtectionTargetKind.SelfContainedAppHost)
+                    Console.WriteLine("Protect the application DLL before publishing this host.");
+            }
+            return 0;
+        }
         var pe = PeImage.Load(bytes);
         var directories = Enumerable.Range(0, DataDir.Names.Length)
             .Select(i => new { Name = DataDir.Names[i], Value = pe.Directory(i) })
@@ -57,6 +86,7 @@ internal static class InspectCommand
             var report = new
             {
                 Path = path,
+                Classification = classification,
                 Size = bytes.Length,
                 Sha256 = sha,
                 Machine = pe.Machine.ToString(),

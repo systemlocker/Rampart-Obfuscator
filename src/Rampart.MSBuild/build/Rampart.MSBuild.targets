@@ -1,0 +1,105 @@
+<Project>
+  <UsingTask TaskName="Rampart.MSBuild.ProtectPublishArtifacts" AssemblyFile="$(RampartTaskAssembly)" />
+  <Target Name="RampartValidatePublish" BeforeTargets="PrepareForPublish"
+          Condition="'$(RampartEnabled)' == 'true' or '$(RampartNativeAotHardened)' == 'true'">
+    <Error Condition="'$(MSBuildRuntimeType)' != 'Core'" Text="RP_MSBUILD_HOST: Rampart requires dotnet publish with MSBuild for .NET." />
+    <Error Condition="'$(Configuration)' != 'Release' and '$(RampartAllowNonRelease)' != 'true'" Text="RP_PUBLISH_CONFIGURATION: Enable RampartAllowNonRelease to protect this configuration." />
+    <Error Condition="!Exists('$(RampartWorkerTool)')" Text="RP_WORKER_MISSING: The Rampart worker tool is unavailable." />
+    <Error Condition="'$(RampartNativeAotHardened)' == 'true' and ('$(RampartEnabled)' != 'true' or '$(PublishAot)' != 'true' or '$(RampartManagedProtection)' != 'true' or '$(RampartNativeAotProtection)' != 'true')"
+           Text="RP_AOT_HARDENING_ORDER: Hardened NativeAOT protection requires both managed and native publish stages with PublishAot enabled." />
+    <PropertyGroup>
+      <RampartStagingDirectory Condition="'$(RampartStagingDirectory)' == ''">$(IntermediateOutputPath)rampart/</RampartStagingDirectory>
+      <_RampartVerificationSystemModule Condition="'$(TargetFrameworkIdentifier)' == '.NETFramework'">mscorlib</_RampartVerificationSystemModule>
+      <_RampartVerificationSystemModule Condition="'$(TargetFrameworkIdentifier)' != '.NETFramework'">System.Runtime</_RampartVerificationSystemModule>
+    </PropertyGroup>
+  </Target>
+
+  <!-- Resolve the complete file list, then stage the selected application
+       assemblies before trimming, ReadyToRun and single-file bundling consume it. -->
+  <Target Name="RampartProtectManagedPublish" AfterTargets="ComputeResolvedFilesToPublishList"
+          BeforeTargets="ILLink;CreateReadyToRunImages;PrepareForBundle" DependsOnTargets="RampartValidatePublish"
+          Condition="'$(RampartEnabled)' == 'true' and '$(RampartManagedProtection)' == 'true' and '$(PublishAot)' != 'true'">
+    <ProtectPublishArtifacts Artifacts="@(ResolvedFileToPublish)" MainAssemblyName="$(TargetFileName)"
+         VerificationReferences="@(ReferencePath)" VerificationSystemModule="$(_RampartVerificationSystemModule)"
+         SelectedAssemblies="@(RampartAssembly)" StagingDirectory="$(RampartStagingDirectory)managed"
+         ConfigurationFile="$(RampartConfiguration)" Seed="$(RampartSeed)" WorkerTool="$(RampartWorkerTool)" TargetKind="ManagedIl">
+      <Output TaskParameter="ProtectedArtifacts" ItemName="_RampartProtectedPublish" />
+      <Output TaskParameter="ManifestPath" PropertyName="RampartManagedManifest" />
+    </ProtectPublishArtifacts>
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" />
+      <ResolvedFileToPublish Include="@(_RampartProtectedPublish)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="RampartProtectBeforeNativeCompilation" BeforeTargets="WriteIlcRspFileForCompilation"
+          DependsOnTargets="RampartValidatePublish;ComputeIlcCompileInputs"
+          Condition="'$(RampartEnabled)' == 'true' and '$(RampartManagedProtection)' == 'true' and '$(PublishAot)' == 'true'">
+    <!-- Dependencies are compiler references, not root inputs. Preserve that
+         distinction while staging explicitly selected application assemblies. -->
+    <ItemGroup>
+      <!-- C# determinism does not make the Windows native link deterministic.
+           Request reproducible debug identifiers/timestamps from the linker;
+           post-link protection must preserve those runtime/debug records. -->
+      <LinkerArg Include="/Brepro" Condition="'$(RampartNativeAotHardened)' == 'true' and '$(_targetOS)' == 'win'" />
+      <_RampartAotArtifacts Include="@(IlcCompileInput)" RampartCompilerRole="Input" />
+      <_RampartAotArtifacts Include="@(IlcReference)" RampartCompilerRole="Reference" />
+    </ItemGroup>
+    <ProtectPublishArtifacts Artifacts="@(_RampartAotArtifacts)" MainAssemblyName="$(TargetFileName)"
+         VerificationReferences="@(IlcReference)" FrameworkVerificationReferences="@(DefaultFrameworkAssemblies)"
+         VerificationSystemModule="System.Private.CoreLib"
+         SelectedAssemblies="@(RampartAssembly)"
+         StagingDirectory="$(RampartStagingDirectory)aot-input" ConfigurationFile="$(RampartConfiguration)"
+         HardenedNativeAot="$(RampartNativeAotHardened)"
+         Seed="$(RampartSeed)" WorkerTool="$(RampartWorkerTool)" TargetKind="ManagedIl">
+      <Output TaskParameter="ProtectedArtifacts" ItemName="_RampartAotInput" />
+      <Output TaskParameter="ManifestPath" PropertyName="RampartManagedManifest" />
+    </ProtectPublishArtifacts>
+    <ItemGroup>
+      <IlcCompileInput Remove="@(IlcCompileInput)" />
+      <IlcCompileInput Include="@(_RampartAotInput)" Condition="'%(_RampartAotInput.RampartCompilerRole)' == 'Input'" />
+      <IlcReference Remove="@(IlcReference)" />
+      <IlcReference Include="@(_RampartAotInput)" Condition="'%(_RampartAotInput.RampartCompilerRole)' == 'Reference'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- A Windows linker can reuse type records from an earlier PDB even with
+       /Brepro and /INCREMENTAL:NO. Discard that history only when the native
+       link is due, using the same input/output test as the SDK's LinkNative.
+       Unchanged publishes retain their original PDB and skip both targets. -->
+  <Target Name="RampartPrepareReproducibleNativeLink" BeforeTargets="LinkNative"
+          Inputs="$(NativeObject);@(NativeLibrary)" Outputs="$(NativeBinary)"
+          Condition="'$(RampartEnabled)' == 'true' and '$(RampartNativeAotHardened)' == 'true' and '$(_targetOS)' == 'win' and '$(NativeSymbolExt)' == '.pdb'">
+    <Delete Files="$(NativeOutputPath)$(TargetName)$(NativeSymbolExt)" />
+  </Target>
+
+  <!-- NativeOutputPath becomes a disposable staged directory only after linking.
+       Both the ordinary publish copy and NativeAOT's final copy consume it. -->
+  <Target Name="RampartProtectNativeAotPublish" BeforeTargets="ComputeLinkedFilesToPublish"
+          DependsOnTargets="RampartValidatePublish;LinkNative"
+          Condition="'$(RampartEnabled)' == 'true' and '$(RampartNativeAotProtection)' == 'true' and '$(PublishAot)' == 'true'">
+    <ItemGroup>
+      <_RampartNativeArtifact Include="$(NativeOutputPath)$(TargetName)$(NativeBinaryExt)" />
+      <!-- Symbols are publish inputs too: include them in the hashed manifest,
+           even when protection preserves their bytes. -->
+      <_RampartNativeArtifact Include="$(NativeOutputPath)$(TargetName).pdb"
+          Condition="Exists('$(NativeOutputPath)$(TargetName).pdb')" />
+    </ItemGroup>
+    <ProtectPublishArtifacts Artifacts="@(_RampartNativeArtifact)" MainAssemblyName="$(TargetName)$(NativeBinaryExt)"
+         StagingDirectory="$(RampartStagingDirectory)aot-output" ConfigurationFile="$(RampartNativeAotConfiguration)"
+         Seed="$(RampartSeed)" WorkerTool="$(RampartWorkerTool)" TargetKind="NativeAot">
+      <Output TaskParameter="ProtectedArtifacts" ItemName="_RampartProtectedNative" />
+      <Output TaskParameter="ManifestPath" PropertyName="RampartNativeAotManifest" />
+      <Output TaskParameter="PrimaryOutputDirectory" PropertyName="NativeOutputPath" />
+    </ProtectPublishArtifacts>
+    <PropertyGroup>
+      <!-- Newer SDKs copy NativeBinary after Publish, while older SDKs rebuild
+           its path from NativeOutputPath. Redirect both after linking so the
+           final SDK copy cannot replace the protected image with its input. -->
+      <NativeBinary>$(NativeOutputPath)$(TargetName)$(NativeBinaryExt)</NativeBinary>
+    </PropertyGroup>
+  </Target>
+
+  <!-- Consumers attach Authenticode signing here, then create packages. -->
+  <Target Name="RampartProtectionComplete" AfterTargets="Publish" Condition="'$(RampartEnabled)' == 'true'" />
+</Project>

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PackageId>Rampart.MSBuild</PackageId>
+    <Description>Opt-in publish integration for Rampart.</Description>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- Task/worker assemblies are deliberately private build tools, not compile references. -->
+    <NoWarn>$(NoWarn);NU5100</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.11.48" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.11.48" PrivateAssets="all" ExcludeAssets="runtime" />
+    <ProjectReference Include="../Rampart.Core/Rampart.Core.csproj" PrivateAssets="all" />
+    <ProjectReference Include="../Rampart.Cli/Rampart.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="build/Rampart.MSBuild.props" Pack="true" PackagePath="build/" />
+    <None Include="build/Rampart.MSBuild.targets" Pack="true" PackagePath="build/" />
+  </ItemGroup>
+  <Target Name="IncludeTaskAndWorker" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <MSBuild Projects="../Rampart.Cli/Rampart.Cli.csproj" Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(IntermediateOutputPath)worker/;DebugType=None;DebugSymbols=false" />
+    <ItemGroup>
+      <None Include="$(TargetDir)*.dll" Pack="true" PackagePath="tasks/net8.0/" />
+      <None Include="$(IntermediateOutputPath)worker/**/*.dll;$(IntermediateOutputPath)worker/**/*.json"
+            Exclude="$(IntermediateOutputPath)worker/**/*.pdb" Pack="true" PackagePath="tools/net8.0/" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -1,9 +1,9 @@
 # Rampart
 
-Rampart is an experimental, open-source Windows PE protector for small native
-applications. It reshapes x64 executables with reproducible,
-per-build transforms while keeping the build configuration and resulting changes
-inspectable.
+Rampart is an experimental, open-source protector for Windows applications. It
+supports native x64 PE executables, pure managed IL assemblies, and eligible
+Windows x64 NativeAOT publish outputs. Reproducible per-build transforms keep the
+configuration and resulting changes inspectable.
 
 Protect copies of your binaries, keep the original build artifacts, and test
 protected output on every Windows version you
@@ -13,10 +13,16 @@ validation of sensitive operations.
 ## Supported capabilities
 
 Rampart provides PE metadata transforms, import-reference concealment, startup
-string protection, selected native-function transformations, and opt-in runtime
-integrity checks. `rampart knobs` lists supported settings; `rampart explain`
-describes their available levels. Presets stay within those level ceilings, and
-explicit unsupported requests fail validation.
+string protection, selected native-function transformations, managed IL
+protection, a conservative NativeAOT post-link stage, and opt-in runtime integrity
+checks. It also includes an opt-in MSBuild package that protects publish artifacts
+at the correct managed and NativeAOT stages.
+
+`rampart inspect` classifies an artifact without loading or running it.
+`rampart knobs` lists the shared protection settings, while target-specific
+managed options live under the versioned `Targets` configuration object. Native
+presets stay within verified level ceilings; unsupported requests fail instead of
+silently downgrading.
 
 See [Protection coverage](FEATURES.md) for supported mechanisms, selection
 requirements, and compatibility limits.
@@ -50,11 +56,13 @@ requirements, and compatibility limits.
 | Nested VM and invocation-owned bytecode re-keying | Light |
 | Exception-dispatched branches and control-flow edges | Light |
 
-The build pipeline targets PE32+ AMD64 images and preserves ASLR relocations.
-Native executable overlays are retained after the new Rampart section. DLLs,
-managed .NET images, and already-protected inputs are rejected during preflight.
-Because transforms invalidate Authenticode, sign the protected output rather than
-the input binary.
+The native PE backend targets PE32+ AMD64 executables and preserves ASLR
+relocations and overlays. The managed backend accepts supported pure-IL .NET
+assemblies. The NativeAOT backend admits only structurally recognized Windows x64
+outputs and a small verified pass allowlist. Apphosts, ReadyToRun images,
+single-file bundles, mixed-mode assemblies, and already-protected inputs are
+identified and rejected with stage-specific guidance. Because binary transforms
+invalidate Authenticode, sign the protected output rather than the input binary.
 
 ## Install
 
@@ -68,19 +76,21 @@ The Windows x64 archive includes the .NET runtime. Extract the archive, then run
 To install the .NET tool with the .NET 8 SDK or newer:
 
 ```powershell
-dotnet tool install --global rampart --version 0.2.0
+dotnet tool install --global rampart --version 0.3.0
 rampart --version
 ```
 
 The `Rampart.Core` NuGet package provides the transformation engine for .NET 8
-applications. Add it with `dotnet add package Rampart.Core --version 0.2.0`.
+applications. Add it with `dotnet add package Rampart.Core --version 0.3.0`.
+`Rampart.MSBuild` provides disabled-by-default publish integration; reference it
+with `PrivateAssets="all"` at the same version as the tool.
 
 ## Build
 
 Install the .NET 8 SDK, then run:
 
 ```powershell
-dotnet build src/Rampart.Cli/Rampart.Cli.csproj
+dotnet build Rampart.slnx
 ```
 
 The core library builds cross-platform. Run and verify protected executables on
@@ -106,6 +116,60 @@ dotnet run --project src/Rampart.Cli -- inspect app.protected.exe
 
 Use `--force` to replace an existing output file. Rampart always refuses to use
 the input path itself as the output path.
+
+### Managed .NET quick start
+
+Managed protection is explicit; native presets do not apply to managed IL. Start
+with a small configuration and review the private evidence map produced beside the
+output:
+
+```json
+{
+  "Seed": 12345,
+  "Targets": {
+    "Version": 1,
+    "Managed": {
+      "Strings": true,
+      "Constants": true,
+      "MetadataHygiene": true
+    }
+  }
+}
+```
+
+```powershell
+rampart inspect path\to\Application.dll --json
+rampart protect path\to\Application.dll `
+  --config rampart-managed.json --out Application.protected.dll
+```
+
+Rampart preserves supported portable or embedded PDBs, verifies emitted IL, and
+records applied, skipped, and rejected work per method. Unsupported methods stay
+unchanged with a reason. Keep `.rmap.json` files, PDBs, keep lists, and signing
+keys with private build artifacts rather than distributing them.
+
+### Publish integration
+
+Add the package and enable it only for the publish configurations you have tested:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Rampart.MSBuild" Version="0.3.0" PrivateAssets="all" />
+</ItemGroup>
+
+<PropertyGroup>
+  <RampartEnabled>true</RampartEnabled>
+  <RampartSeed>12345</RampartSeed>
+  <RampartConfiguration>$(MSBuildProjectDirectory)/rampart-managed.json</RampartConfiguration>
+</PropertyGroup>
+```
+
+The integration stages pure IL before trimming, ReadyToRun, bundling, or
+NativeAOT compilation. For NativeAOT publishes it can also apply the separate
+post-link NativeAOT allowlist before Authenticode signing. Additional application
+assemblies must be selected explicitly with `RampartAssembly`; runtime-pack
+assemblies are never selected implicitly. Attach signing after the
+`RampartProtectionComplete` target.
 
 ## Configuration
 

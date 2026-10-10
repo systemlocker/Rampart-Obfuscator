@@ -3,6 +3,7 @@ using Rampart.Config;
 using Rampart.Pe;
 using Rampart.Engine.Passes;
 using Rampart.Symbols;
+using Rampart.Targets;
 
 namespace Rampart.Engine;
 
@@ -34,6 +35,17 @@ public sealed class Protector
         IReadOnlyList<SymbolRecord>? symbols = null)
     {
         catalog ??= KnobCatalog.Load();
+
+        // A PE without a CLR directory can still be a .NET host or NativeAOT
+        // application. Keep the native entry point safe even for direct callers.
+        var classification = TargetClassifier.Classify(input);
+        if (classification.Target.Kind != ProtectionTargetKind.NativePe)
+            throw new NotSupportedException($"{classification.ReasonCode}: This artifact requires a different protection backend.");
+        settings.Targets?.Validate();
+        if (settings.Targets?.Override is { } targetOverride && targetOverride != ProtectionTargetKind.NativePe)
+            throw new NotSupportedException("RP_TARGET_OVERRIDE_MISMATCH: The target override does not match the input structure.");
+        if (settings.Targets?.Managed is not null || settings.Targets?.NativeAot is not null)
+            throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: The target settings do not apply to a native PE executable.");
 
         ProtectionCapabilities.Validate(settings, catalog);
 

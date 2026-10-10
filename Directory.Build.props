@@ -3,7 +3,7 @@
           Condition="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)..\')) != ''" />
 
   <PropertyGroup>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Authors>System Locker</Authors>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>CC0-1.0</PackageLicenseExpression>
@@ -16,5 +16,6 @@
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
     <None Include="$(MSBuildThisFileDirectory)FEATURES.md" Pack="true" PackagePath="\" />
     <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)THIRD_PARTY_NOTICES.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>

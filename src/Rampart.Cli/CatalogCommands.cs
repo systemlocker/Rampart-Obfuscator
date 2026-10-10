@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Rampart.Config;
+using Rampart.Targets;
 
 namespace Rampart.Cli;
 
@@ -22,16 +23,18 @@ internal static class CheckCommand
         }
 
         var settings = settingsArgs.Build(catalog);
-        ThreatDials.Apply(settings, catalog);
-        var concerns = ConcernRules.Evaluate(settings, catalog);
-        int budget = KnobCatalog.BudgetFor(settings, catalog);
+        bool native = (settings.Targets?.Override ?? ProtectionTargetKind.NativePe) == ProtectionTargetKind.NativePe;
+        if (native) ThreatDials.Apply(settings, catalog);
+        if (settings.Targets?.Override == ProtectionTargetKind.ManagedIl) _ = ManagedProtectionBackend.ResolveOptions(settings);
+        var concerns = native ? ConcernRules.Evaluate(settings, catalog) : new List<Concern>();
+        int budget = native ? KnobCatalog.BudgetFor(settings, catalog) : 0;
 
         if (settingsArgs.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 Valid = true,
-                Settings = settings,
+                Settings = SettingsArguments.SettingsPayload(settings, settings.Targets?.Override ?? ProtectionTargetKind.NativePe),
                 BudgetPoints = budget,
                 Concerns = concerns,
             }, ProtectionSettingsJson.Options));

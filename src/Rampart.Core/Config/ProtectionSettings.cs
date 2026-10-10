@@ -45,6 +45,10 @@ public sealed class ProtectionSettings
     /// <summary>Ordered module/section/symbol/namespace/source/RVA overrides.</summary>
     public List<ProtectionRule> Rules { get; init; } = [];
 
+    /// <summary>Optional, versioned settings for target-specific backends.
+    /// Omitting this object preserves the native configuration contract.</summary>
+    public TargetProtectionOptions? Targets { get; set; }
+
     public static ProtectionSettings FromPreset(string preset) => new()
     {
         Preset = preset,
@@ -72,8 +76,20 @@ public static class ProtectionSettingsJson
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public static string Serialize(ProtectionSettings settings) =>
-        JsonSerializer.Serialize(settings, Options);
+    public static string Serialize(ProtectionSettings settings)
+    {
+        // Balanced is the legacy model's default, not a managed preset request.
+        // Omit that placeholder so SDK-produced managed configurations can be
+        // reused by the CLI/build integration, which rejects explicit presets.
+        if ((settings.Targets?.Managed is not null || settings.Targets?.Override == Targets.ProtectionTargetKind.ManagedIl)
+            && settings.Preset == Presets.Balanced)
+        {
+            var payload = JsonSerializer.SerializeToNode(settings, Options)!.AsObject();
+            payload.Remove(nameof(ProtectionSettings.Preset));
+            return payload.ToJsonString(Options);
+        }
+        return JsonSerializer.Serialize(settings, Options);
+    }
 
     public static ProtectionSettings Deserialize(string json)
     {
@@ -106,6 +122,7 @@ public static class ProtectionSettingsJson
     {
         if (string.IsNullOrWhiteSpace(settings.Preset))
             throw new FormatException("Protection settings property 'Preset' must be a non-empty string.");
+        settings.Targets?.Validate();
         if (settings.Knobs is null || settings.ThreatFocus is null || settings.SymbolSources is null
             || settings.IncludeSymbols is null || settings.ExcludeSymbols is null
             || settings.IncludeRvaRanges is null || settings.Rules is null)

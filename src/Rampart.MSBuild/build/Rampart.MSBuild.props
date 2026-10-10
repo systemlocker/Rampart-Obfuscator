@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <RampartEnabled Condition="'$(RampartEnabled)' == ''">false</RampartEnabled>
+    <RampartSeed Condition="'$(RampartSeed)' == ''">0</RampartSeed>
+    <RampartAllowNonRelease Condition="'$(RampartAllowNonRelease)' == ''">false</RampartAllowNonRelease>
+    <RampartManagedProtection Condition="'$(RampartManagedProtection)' == ''">true</RampartManagedProtection>
+    <RampartNativeAotProtection Condition="'$(RampartNativeAotProtection)' == ''">true</RampartNativeAotProtection>
+    <RampartNativeAotHardened Condition="'$(RampartNativeAotHardened)' == ''">false</RampartNativeAotHardened>
+    <RampartTaskAssembly Condition="'$(RampartTaskAssembly)' == ''">$(MSBuildThisFileDirectory)../tasks/net8.0/Rampart.MSBuild.dll</RampartTaskAssembly>
+    <RampartWorkerTool Condition="'$(RampartWorkerTool)' == ''">$(MSBuildThisFileDirectory)../tools/net8.0/rampart.dll</RampartWorkerTool>
+  </PropertyGroup>
+</Project>

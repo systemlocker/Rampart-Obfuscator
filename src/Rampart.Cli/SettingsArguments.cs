@@ -1,5 +1,8 @@
 using Rampart.Config;
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Rampart.Targets;
 
 namespace Rampart.Cli;
 
@@ -23,6 +26,8 @@ internal sealed class SettingsArguments
     private string? _pdbTool;
     private string? _watermark;
     private string? _customMessage;
+    private ProtectionTargetKind? _target;
+    private CompatibilityPolicy? _compatibility;
 
     public bool Json { get; private set; }
 
@@ -33,6 +38,20 @@ internal sealed class SettingsArguments
         {
             case "--config":
                 _configPath = RequireValue(args, ref index, arg);
+                return true;
+            case "--target":
+                _target = RequireValue(args, ref index, arg).ToLowerInvariant() switch
+                {
+                    "native" or "native-pe" => ProtectionTargetKind.NativePe,
+                    "nativeaot" => ProtectionTargetKind.NativeAot,
+                    "managed" or "managed-il" => ProtectionTargetKind.ManagedIl,
+                    _ => throw new ArgumentException("RP_TARGET_OPTION: Expected native, nativeaot, or managed."),
+                };
+                return true;
+            case "--compatibility":
+                if (!Enum.TryParse(RequireValue(args, ref index, arg), true, out CompatibilityPolicy policy) || !Enum.IsDefined(policy))
+                    throw new ArgumentException("RP_COMPATIBILITY_OPTION: Expected preserve, warn, or strict.");
+                _compatibility = policy;
                 return true;
             case "--preset":
                 _preset = RequireValue(args, ref index, arg).ToLowerInvariant();
@@ -91,13 +110,20 @@ internal sealed class SettingsArguments
         }
     }
 
-    public ProtectionSettings Build(KnobCatalog catalog)
+    public ProtectionSettings Build(KnobCatalog catalog, ProtectionTargetKind? detectedTarget = null)
     {
         ProtectionSettings settings;
+        bool configuredPreset = false;
         if (_configPath is not null)
         {
             string path = Path.GetFullPath(_configPath);
-            settings = ProtectionSettingsJson.Deserialize(File.ReadAllText(path));
+            string json = File.ReadAllText(path);
+            settings = ProtectionSettingsJson.Deserialize(json);
+            using var document = JsonDocument.Parse(json);
+            var settingsObject = document.RootElement;
+            foreach (var property in settingsObject.EnumerateObject())
+                if (property.Name.Equals("Settings", StringComparison.OrdinalIgnoreCase)) { settingsObject = property.Value; break; }
+            configuredPreset = settingsObject.EnumerateObject().Any(property => property.Name.Equals("Preset", StringComparison.OrdinalIgnoreCase));
             ResolveConfigPaths(settings, Path.GetDirectoryName(path)!);
         }
         else
@@ -113,6 +139,12 @@ internal sealed class SettingsArguments
             settings.Watermark = _watermark;
         if (_customMessage is not null)
             settings.CustomMessage = _customMessage;
+        if (_target is not null || _compatibility is not null)
+        {
+            settings.Targets ??= new TargetProtectionOptions();
+            if (_target is not null) settings.Targets.Override = _target;
+            if (_compatibility is not null) settings.Targets.Compatibility = _compatibility.Value;
+        }
         if (_pdbTool is not null)
             settings.PdbTool = Path.GetFullPath(_pdbTool);
 
@@ -125,10 +157,13 @@ internal sealed class SettingsArguments
         // Bulk selectors establish a profile first. Exact --set overrides then
         // win, while --disable is deliberately final and may expose an invalid
         // dependency combination for the normal validator to explain.
+        var target = detectedTarget ?? settings.Targets?.Override ?? ProtectionTargetKind.NativePe;
+        if (target == ProtectionTargetKind.ManagedIl && (_preset is not null || configuredPreset))
+            throw new NotSupportedException("RP_MANAGED_PRESET_UNSUPPORTED: Native presets do not apply to managed IL. Select managed protections explicitly.");
         if (_only.Count > 0)
-            ProtectionSelection.ApplyOnly(settings, catalog, _only);
+            TargetCapabilities.ApplyOnly(settings, catalog, _only, target);
         foreach (var (group, level) in _groupLevels)
-            ProtectionSelection.ApplyGroupLevel(settings, catalog, group, level);
+            TargetCapabilities.ApplyGroup(settings, catalog, group, level, target);
         foreach (var (id, level) in _sets)
             settings.Knobs[id] = level;
         ProtectionSelection.Disable(settings, catalog, _disabled);
@@ -138,8 +173,17 @@ internal sealed class SettingsArguments
                 settings.ThreatFocus.Add(tag);
         }
 
-        ProtectionCapabilities.Validate(settings, catalog);
+        TargetCapabilities.ValidateSettings(settings, catalog, target);
         return settings;
+    }
+
+    internal static JsonObject SettingsPayload(ProtectionSettings settings, ProtectionTargetKind target)
+    {
+        var payload = JsonSerializer.SerializeToNode(settings, ProtectionSettingsJson.Options)!.AsObject();
+        // The legacy default is a native placeholder. Omitting it keeps a
+        // managed preview reusable as input without creating an explicit preset.
+        if (target == ProtectionTargetKind.ManagedIl) payload.Remove(nameof(ProtectionSettings.Preset));
+        return payload;
     }
 
     private void ParseSet(string assignment)

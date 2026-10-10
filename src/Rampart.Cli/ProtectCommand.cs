@@ -3,6 +3,7 @@ using Rampart.Config;
 using Rampart.Engine;
 using Rampart.Pe;
 using Rampart.Symbols;
+using Rampart.Targets;
 
 namespace Rampart.Cli;
 
@@ -22,6 +23,8 @@ internal static class ProtectCommand
         bool force = false;
         bool emitSymbolMap = true;
         string? symbolMap = null;
+        var verificationReferences = new List<string>();
+        string? verificationSystemModule = null;
         var settingsArgs = new SettingsArguments();
 
         for (int i = 0; i < args.Length; i++)
@@ -42,6 +45,12 @@ internal static class ProtectCommand
                     break;
                 case "--no-symbol-map":
                     emitSymbolMap = false;
+                    break;
+                case "--verification-reference":
+                    verificationReferences.Add(SettingsArguments.RequireValue(args, ref i, args[i]));
+                    break;
+                case "--verification-system-module":
+                    verificationSystemModule = SettingsArguments.RequireValue(args, ref i, args[i]);
                     break;
                 default:
                     if (settingsArgs.TryConsume(args, ref i))
@@ -75,28 +84,81 @@ internal static class ProtectCommand
         }
 
         var catalog = KnobCatalog.Load();
-        var settings = settingsArgs.Build(catalog);
+        byte[] inputBytes = ProtectionPipeline.ReadInput(inputPath);
+        var settings = settingsArgs.Build(catalog, TargetClassifier.Classify(inputBytes, inputPath).Target.Kind);
+        if (TargetClassifier.Classify(inputBytes, inputPath).Target.Kind == ProtectionTargetKind.ManagedIl)
+            ManagedVerificationReferences.Configure(inputPath, settings, verificationReferences, verificationSystemModule, resolveAutomatic: dryRun);
+        else if (verificationReferences.Count != 0 || verificationSystemModule is not null)
+            throw new ArgumentException("RP_TARGET_OPTIONS_MISMATCH: Verification references apply only to managed IL.");
+        var pipeline = new ProtectionPipeline();
+        var plan = pipeline.Plan(inputBytes, settings);
+        var graph = ArtifactGraph.Inspect(inputPath, plan.Classification,
+            ArtifactSigningInstructions.ForTarget(plan.Classification.Target, settings.Targets?.Managed?.StrongNameKeyEnvironmentVariable));
 
         if (dryRun)
         {
-            ThreatDials.Apply(settings, catalog);
-            var concerns = ConcernRules.Evaluate(settings, catalog);
-            WritePreview(inputPath, outputPath, symbolMapPath, settings, catalog, concerns, settingsArgs.Json);
+            if (plan.Classification.Target.Kind == ProtectionTargetKind.NativePe)
+                ThreatDials.Apply(settings, catalog);
+            var concerns = plan.Classification.Target.Kind == ProtectionTargetKind.NativePe
+                ? ConcernRules.Evaluate(settings, catalog) : [];
+            WritePreview(inputPath, outputPath, symbolMapPath, settings, catalog, concerns, settingsArgs.Json, plan, graph);
             return 0;
         }
 
-        byte[] inputBytes = File.ReadAllBytes(inputPath);
-        var inputPe = PeImage.Load(inputBytes);
-        List<SymbolRecord> symbols = SymbolLoader.Load(settings.SymbolSources, inputPe, settings.PdbTool);
         EnsureCanWrite(outputPath, force);
         if (symbolMapPath is not null)
             EnsureCanWrite(symbolMapPath, force);
-        var result = new Protector().Protect(inputBytes, settings, catalog, symbols);
-        WriteOutput(outputPath, result.Output, force);
+        string inputPdb = Path.ChangeExtension(inputPath, ".pdb");
+        byte[]? pdb = plan.Classification.Target.Kind != ProtectionTargetKind.NativePe && File.Exists(inputPdb)
+            ? ProtectionPipeline.ReadInput(inputPdb) : null;
+        var result = plan.Classification.Target.Kind == ProtectionTargetKind.ManagedIl
+            ? ManagedWorker.Protect(inputBytes, pdb, settings, plan, inputPath)
+            : pipeline.Protect(inputBytes, settings, pdb);
+        var artifacts = new List<OutputArtifact> { new(outputPath, result.Output) };
         if (symbolMapPath is not null)
-            WriteJsonOutput(symbolMapPath, result.SymbolMap, force);
-        WriteResult(inputPath, outputPath, symbolMapPath, result, settingsArgs.Json);
+            artifacts.Add(new(symbolMapPath, JsonSerializer.SerializeToUtf8Bytes(result.PrivateMap, ProtectionSettingsJson.Options)));
+        string outputPdb = Path.ChangeExtension(outputPath, ".pdb");
+        if (result.Symbols is not null)
+            artifacts.Add(new(outputPdb, result.Symbols));
+        // A previous output PDB no longer describes an image emitted without
+        // symbols. Remove it in the same rollback transaction as the new image.
+        string[] removals = plan.Classification.Target.Kind == ProtectionTargetKind.ManagedIl
+            && result.Symbols is null && File.Exists(outputPdb) ? [outputPdb] : [];
+        ArtifactWriter.Write(artifacts, force, [inputPath, inputPdb], removals);
+        if (result.Details is ProtectionResult native)
+            WriteResult(inputPath, outputPath, symbolMapPath, native, settingsArgs.Json);
+        else
+            WriteTargetResult(inputPath, outputPath, symbolMapPath, result, settingsArgs.Json, graph);
         return 0;
+    }
+
+    private static void WriteTargetResult(string input, string output, string? map, BackendProtectionResult result, bool json, ArtifactGraph graph)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                Input = input,
+                Output = output,
+                SymbolMap = map,
+                result.Seed,
+                result.Plan,
+                result.InputSize,
+                OutputSize = result.Output.Length,
+                result.InputSha256,
+                result.OutputSha256,
+                result.Evidence,
+                Artifacts = graph,
+            }, ProtectionSettingsJson.Options));
+        }
+        else
+        {
+            Console.WriteLine($"target: {result.Plan.Classification.Target.Kind}");
+            foreach (string diagnostic in result.Plan.Diagnostics) Console.Error.WriteLine(diagnostic);
+            Console.WriteLine($"wrote {output}");
+            if (map is not null) Console.WriteLine($"private map {map}");
+            Console.WriteLine($"sha256 {result.OutputSha256}");
+        }
     }
 
     private static string DefaultSymbolMapPath(string outputPath)
@@ -153,14 +215,18 @@ internal static class ProtectCommand
         ProtectionSettings settings,
         KnobCatalog catalog,
         List<Concern> concerns,
-        bool json)
+        bool json,
+        ProtectionPlan plan,
+        ArtifactGraph graph)
     {
         var preview = new
         {
             Input = inputPath,
             Output = outputPath,
             SymbolMap = symbolMapPath,
-            Settings = settings,
+            Settings = SettingsArguments.SettingsPayload(settings, plan.Classification.Target.Kind),
+            Plan = plan,
+            Artifacts = graph,
             BudgetPoints = KnobCatalog.BudgetFor(settings, catalog),
             Concerns = concerns,
         };
@@ -173,7 +239,7 @@ internal static class ProtectCommand
 
         Console.WriteLine($"input:  {inputPath}");
         Console.WriteLine($"output: {outputPath}");
-        Console.WriteLine(ProtectionSettingsJson.Serialize(settings));
+        Console.WriteLine(SettingsArguments.SettingsPayload(settings, plan.Classification.Target.Kind).ToJsonString(ProtectionSettingsJson.Options));
         PrintConcerns(concerns);
     }
 
@@ -230,6 +296,8 @@ internal static class ProtectCommand
 
           -o, --out <file>          output path (default: <name>.protected.<ext>)
               --config <file>       load settings JSON
+              --target <kind>       assert native, nativeaot, or managed input
+              --compatibility <p>   preserve, warn, or strict compatibility policy
               --preset <name>       light, balanced, heavy, maximum, or nuclear
               --seed <number>       reproducible signed 64-bit build seed
               --set <id>=<level>    override one knob; repeatable
@@ -246,6 +314,10 @@ internal static class ProtectCommand
                                     apply a per-function preset; repeatable
               --symbol-map <file>   private sidecar path (default: <output-name>.rmap.json)
               --no-symbol-map       do not emit the private address map
+              --verification-reference <file>
+                                    explicit managed dependency; repeat for the complete reference set
+              --verification-system-module <name>
+                                    core type assembly for the supplied managed references
               --focus <tags>        comma-separated threat tags; repeatable
               --watermark <text>    build-owner watermark
               --custom-message <t>  response message for supported response knobs

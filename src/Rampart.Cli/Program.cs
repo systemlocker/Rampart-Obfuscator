@@ -15,6 +15,7 @@ internal static class Program
             return args[0].ToLowerInvariant() switch
             {
                 "protect" => ProtectCommand.Run(args[1..]),
+                "__managed-worker" => ManagedWorker.Run(args[1..]),
                 "inspect" => InspectCommand.Run(args[1..]),
                 "check" => CheckCommand.Run(args[1..]),
                 "knobs" => KnobsCommand.Run(args[1..]),

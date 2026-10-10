@@ -1,14 +1,15 @@
 # Protection coverage
 
-This guide describes Rampart's supported protections, their level ceilings, and
-compatibility requirements for native Windows x64 executables.
+This guide describes Rampart's supported protections, target-specific limits,
+and compatibility requirements for native Windows x64 executables, pure managed
+IL assemblies, and eligible Windows x64 NativeAOT outputs.
 
 Presets and bulk group changes are limited to supported levels. An explicit
 request for an unsupported level fails validation. A supported setting may still
 skip an input region that does not meet its requirements; review the build log
 and applied-protection report for each output.
 
-## Protected today
+## Native PE protection
 
 | What is protected | Protection | Verified through | What changes |
 | --- | --- | --- | --- |
@@ -94,10 +95,68 @@ behavior, and background monitors remain explicit opt-ins rather than preset
 defaults. This keeps ordinary Balanced builds conservative while allowing a
 release profile to select and compatibility-test each runtime measure.
 
-These protections currently target PE32+ AMD64 executables. DLLs, managed .NET
-images, and already-protected inputs are rejected during preflight. Authenticode
-signatures do not survive a binary rewrite, so the protected output must be
-signed afterward.
+These protections target PE32+ AMD64 executables. Native DLLs and
+already-protected inputs are rejected by this backend. Authenticode signatures do
+not survive a binary rewrite, so the protected output must be signed afterward.
+
+## Managed IL protection
+
+The managed backend operates on pure-IL assemblies without loading or executing
+application code. Options are explicit under `Targets.Managed`; native presets
+are rejected for managed inputs.
+
+| Option | Scope | Behavior |
+| --- | --- | --- |
+| `Strings` | Eligible method bodies | Replaces eligible string loads with a generated decoder and protected payload while preserving metadata-owned resource, interop, and serialization uses. |
+| `Constants` | Eligible method bodies | Rewrites verified integer constants while preserving stack behavior and exception semantics. |
+| `ControlFlow` | Eligible methods | Rebuilds a bounded, typed int32 subset; unsupported bodies remain unchanged with a reason. |
+| `Virtualize` | Explicitly selected methods | Converts a verified int32 method subset to a per-build interpreter. Selection is required and performance-sensitive methods should be measured. |
+| `HardenedRuntime` | Explicitly selected modern .NET methods | Uses authenticated encrypted payloads and method-specific dispatch. Embedded application-side keys do not provide confidentiality from the running application. |
+| `MetadataHygiene` | Assembly metadata | Removes supported build and symbol clues without changing the public API. |
+| `Integrity` | Protector-owned payloads | Detects changes to Rampart-owned managed payloads; it is not whole-process integrity. |
+| `RenamePrivateMembers` | Conservatively proven private/internal identities | Renames only identities whose reflection, serialization, interop, friend, and resource contracts can be preserved. |
+
+Managed method rules can match assembly, module, namespace, type, method,
+signature, metadata token, source document, and generated-code state. Keep
+patterns and keep files preserve externally discovered identities. Strict
+compatibility rejects unresolved reflection contracts; the default retains
+uncertain names and reports the limitation.
+
+Portable and embedded PDBs are rewritten with token and sequence-point mappings.
+Opaque Windows PDBs require symbol preservation to be disabled. Strong-named
+assemblies require a key selected through an environment-variable name; key paths
+and key material do not belong in configuration or release artifacts. The output
+receives structural verification and, when references are available, nominal
+ECMA-335 verification. The private map records the verification engine, reference
+scope, hashes, and per-method evidence.
+
+## NativeAOT protection
+
+Rampart recognizes eligible Windows x64 NativeAOT outputs by structure rather
+than filename. The initial post-link backend intentionally allows only Light
+`packaging.header-disguise` and Light `packaging.symbol-scrub`. It snapshots
+runtime-owned PE, unwind, relocation, load-configuration, debug, and symbol data;
+each pass is transactional and the output is rejected if an invariant changes.
+
+NativeAOT method-body rewriting, runtime hooks, packing, managed options, and
+ordinary native presets are not accepted after native compilation. Apply managed
+IL protection before NativeAOT compilation, then use the post-link allowlist, and
+finally apply Authenticode signing.
+
+## MSBuild publish integration
+
+`Rampart.MSBuild` is opt-in and disabled by default. It stages selected managed
+assemblies before trimming, ReadyToRun, bundling, or NativeAOT compilation, and it
+can stage the eligible NativeAOT output after linking. Compiler outputs remain
+recoverable; protected artifacts and private manifests live in intermediate
+directories. Cache keys include input, symbols, configuration, seed, target,
+tool, dependency, and verification-reference hashes.
+
+The main application assembly is selected automatically. Additional application
+assemblies require explicit `RampartAssembly` items; framework and runtime-pack
+assemblies are not selected implicitly. Publish protection runs before the
+`RampartProtectionComplete` extension point so Authenticode and packaging can run
+after every transformation.
 
 ### Fine-grained protection boundaries
 
