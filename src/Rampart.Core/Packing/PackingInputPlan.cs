@@ -29,6 +29,9 @@ internal sealed class PackingInputPlan
         {
             if (section.SizeOfRawData > 16 * 1024 * 1024 || section.Data.Length != section.SizeOfRawData)
                 Reject("requires complete data sections no larger than 16 MiB");
+            if (section.VirtualSize != 0
+                && section.SizeOfRawData > PeImage.AlignUp(section.VirtualSize, pe.SectionAlignment))
+                Reject("found a section whose raw data exceeds its aligned virtual size");
             ulong start = section.VirtualAddress;
             ulong end = start + section.ResolvedVirtualSize;
             if (start % pe.SectionAlignment != 0 || end > pe.SizeOfImage)
@@ -42,22 +45,29 @@ internal sealed class PackingInputPlan
 
     public void ValidateMetadata(PeImage pe, bool original)
     {
-        for (int i = 0; i < 16; i++)
+        try
         {
-            DataDirectory directory = pe.Directory(i);
-            if (directory.IsEmpty)
-                continue;
-            // Security is a file offset, not a loader RVA; the pipeline clears
-            // invalidated signatures before compacting the file, retaining overlay bytes.
-            if (i == DataDir.Security)
-                continue;
-            if (i is not (DataDir.Import or DataDir.Iat or DataDir.Exception or DataDir.Basereloc))
-                Reject($"does not support {(original ? "original" : "generated")} {DataDir.Names[i]} metadata");
-            RequireOutside(pe, directory.RelativeVirtualAddress, directory.Size);
+            for (int i = 0; i < 16; i++)
+            {
+                DataDirectory directory = pe.Directory(i);
+                if (directory.IsEmpty)
+                    continue;
+                // Security is a file offset, not a loader RVA; the pipeline clears
+                // invalidated signatures before compacting the file, retaining overlay bytes.
+                if (i == DataDir.Security)
+                    continue;
+                if (i is not (DataDir.Import or DataDir.Iat or DataDir.Exception or DataDir.Basereloc))
+                    Reject($"does not support {(original ? "original" : "generated")} {DataDir.Names[i]} metadata");
+                RequireOutside(pe, directory.RelativeVirtualAddress, directory.Size);
+            }
+            ValidateImports(pe);
+            ValidateUnwind(pe);
+            ValidateRelocations(pe);
         }
-        ValidateImports(pe);
-        ValidateUnwind(pe);
-        ValidateRelocations(pe);
+        catch (OverflowException)
+        {
+            Reject("encountered an overflowing PE metadata RVA or size");
+        }
     }
 
     private void ValidateImports(PeImage pe)
@@ -71,8 +81,9 @@ internal sealed class PackingInputPlan
             uint at = checked(imports.RelativeVirtualAddress + offset);
             byte[] descriptor = pe.ReadRva(at, 20);
             if (descriptor.All(b => b == 0)) { terminated = true; break; }
-            uint originalThunk = U32(0), name = U32(12), firstThunk = U32(16);
-            if (U32(4) != 0 || U32(8) != 0 || name == 0 || firstThunk == 0)
+            uint originalThunk = U32(0), timeDateStamp = U32(4), forwarderChain = U32(8), name = U32(12), firstThunk = U32(16);
+            // ForwarderChain == 0 or 0xFFFFFFFF (-1) are both standard unbound values emitted by linkers.
+            if (timeDateStamp != 0 || (forwarderChain != 0 && forwarderChain != uint.MaxValue) || name == 0 || firstThunk == 0)
                 Reject("requires unbound ordinary import descriptors");
             RequireString(pe, name);
             uint lookup = originalThunk == 0 ? firstThunk : originalThunk;
@@ -110,6 +121,8 @@ internal sealed class PackingInputPlan
         foreach (RuntimeFunction function in ExceptionTable.Parse(pe))
         {
             if (function.EndRva <= function.BeginRva) Reject("found an invalid runtime-function extent");
+            // Bit 0 of UnwindData denotes RUNTIME_FUNCTION_INDIRECT (an indirection to another entry).
+            if ((function.UnwindRva & 1) != 0) Reject("does not support indirect runtime-function unwind records");
             RequireOutside(pe, function.BeginRva, function.EndRva - function.BeginRva);
             RequireOutside(pe, function.UnwindRva, 4);
             byte[] header = pe.ReadRva(function.UnwindRva, 4);

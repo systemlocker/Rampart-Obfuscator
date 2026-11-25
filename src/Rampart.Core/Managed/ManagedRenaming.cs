@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Mono.Cecil;
+using Rampart.Config;
 
 namespace Rampart.Managed;
 
@@ -9,6 +10,7 @@ internal sealed class ManagedRenaming
     private readonly Dictionary<string, string> names = new(StringComparer.Ordinal);
     private readonly List<(IMetadataTokenProvider Subject, int Token, string Original, string Protected, string Kind)> entries = [];
     private readonly Dictionary<IMetadataTokenProvider, List<MemberReference>> aliases = [];
+    private readonly HashSet<string> ambiguous = new(StringComparer.Ordinal);
     private readonly ModuleDefinition module;
     private readonly ManagedContractAnalysis contracts;
     private readonly string[] keeps;
@@ -21,8 +23,12 @@ internal sealed class ManagedRenaming
         // Imported references may be distinct Cecil objects from their local
         // definitions. Bind them before any name changes; never resolve external
         // assemblies implicitly from the machine running protection.
-        var definitions = module.GetTypes().SelectMany(type => new MemberReference[] { type }.Concat(type.Methods).Concat(type.Fields))
-            .ToDictionary(member => member.FullName, StringComparer.Ordinal);
+        var definitions = new Dictionary<string, MemberReference>(StringComparer.Ordinal);
+        foreach (var member in module.GetTypes().SelectMany(type => new MemberReference[] { type }.Concat(type.Methods).Concat(type.Fields)))
+        {
+            if (!definitions.TryAdd(member.FullName, member)) ambiguous.Add(member.FullName);
+        }
+        foreach (var duplicate in ambiguous) definitions.Remove(duplicate);
         foreach (var reference in module.GetTypeReferences().Cast<MemberReference>().Concat(module.GetMemberReferences()))
         {
             var scope = reference is TypeReference type ? type.Scope : reference.DeclaringType.Scope;
@@ -40,28 +46,31 @@ internal sealed class ManagedRenaming
     internal string? MethodReason(MethodDefinition method, ManagedMethodIdentity identity)
     {
         if (contracts.Reason(method) is { } reason) return reason;
+        if (ambiguous.Contains(identity.Signature)) return "ambiguous-member-signature";
         if (xaml) return "xaml-resource-contract";
         if (!(method.IsPrivate || method.IsAssembly && !friend)) return "external-visibility";
-        if (method.IsConstructor || method.IsVirtual || method.IsPInvokeImpl || method.IsSpecialName || method.HasOverrides
+        if (method.IsConstructor || method.IsVirtual || method.IsPInvokeImpl || method.IsUnmanagedExport || method.IsSpecialName || method.HasOverrides
             || method.HasGenericParameters || method.DeclaringType.HasGenericParameters) return "runtime-method-contract";
-        if (HasNameContractAttributes(method) || HasNameContractAttributes(method.DeclaringType) || identity.GeneratedCode) return "attributed-or-generated-contract";
+        if (HasNameContractAttributes(method) || HasEnclosingNameContractAttributes(method.DeclaringType) || identity.GeneratedCode) return "attributed-or-generated-contract";
         if (method.DeclaringType.IsInterface || method.DeclaringType.IsSerializable || method.DeclaringType.IsExplicitLayout || method.DeclaringType.IsSequentialLayout) return "type-layout-or-serialization-contract";
         if (keeps.Any(pattern => ManagedPolicy.Matches(pattern, identity.Signature) || ManagedPolicy.Matches(pattern, identity.Type))) return "keep-policy";
         return null;
     }
     internal void RenameMethod(MethodDefinition method, ManagedMethodIdentity identity, long seed) => Rename(method, identity.Signature, method.Name, "method", seed, name => method.Name = name);
-    internal void Apply(long seed)
+    internal void Apply(long seed, ManagedProtectionOptions options)
     {
         foreach (var type in module.GetTypes().ToArray())
         {
             var original = Normalize(type.FullName);
-            if (xaml || contracts.Reason(type) is not null || HasNameContractAttributes(type) || type.HasGenericParameters || type.HasInterfaces
+            if (!ManagedPolicy.AllowsTypeRename(type, original, options)) continue;
+            if (xaml || ambiguous.Contains(original) || contracts.Reason(type) is not null || HasEnclosingNameContractAttributes(type)
+                || ManagedPolicy.IsCompilerGenerated(type) || type.HasGenericParameters || type.HasInterfaces
                 || type.IsInterface || type.IsValueType || type.IsSerializable || type.IsSequentialLayout || type.IsExplicitLayout || type.Name.StartsWith('<')
                 || type.BaseType?.FullName != "System.Object" || keeps.Any(pattern => ManagedPolicy.Matches(pattern, original))) continue;
             foreach (var field in type.Fields)
             {
                 var fieldName = Normalize(field.FullName);
-                if (contracts.Reason(field) is not null || !(field.IsPrivate || field.IsAssembly && !friend) || field.IsLiteral || field.IsSpecialName
+                if (ambiguous.Contains(fieldName) || contracts.Reason(field) is not null || !(field.IsPrivate || field.IsAssembly && !friend) || field.IsLiteral || field.IsSpecialName
                     || HasNameContractAttributes(field) || field.HasMarshalInfo || field.RVA != 0
                     || keeps.Any(pattern => ManagedPolicy.Matches(pattern, fieldName))) continue;
                 Rename(field, fieldName, field.Name, "field", seed, name => field.Name = name);
@@ -72,6 +81,12 @@ internal sealed class ManagedRenaming
                 Rename(type, original, type.Name, "type", seed, name => type.Name = name);
         }
     }
+    private static bool HasEnclosingNameContractAttributes(TypeDefinition? type)
+    {
+        for (var current = type; current is not null; current = current.DeclaringType)
+            if (HasNameContractAttributes(current)) return true;
+        return false;
+    }
     private static bool HasNameContractAttributes(ICustomAttributeProvider provider) => provider.CustomAttributes.Any(attribute =>
         // These compiler annotations contain nullability flags, not identifiers.
         // Preserve their blobs while allowing otherwise eligible declarations to
@@ -80,16 +95,20 @@ internal sealed class ManagedRenaming
         attribute.AttributeType.FullName is not "System.Runtime.CompilerServices.NullableAttribute"
             and not "System.Runtime.CompilerServices.NullableContextAttribute"
             and not "System.Runtime.CompilerServices.NullablePublicOnlyAttribute");
-    internal static IEnumerable<TypeReference> AttributeTypeArguments(ModuleDefinition module)
+    internal static IEnumerable<CustomAttribute> AllCustomAttributes(ModuleDefinition module)
     {
-        IEnumerable<TypeReference> Values(CustomAttributeArgument argument) => argument.Value switch
-        { TypeReference type => [type], CustomAttributeArgument nested => Values(nested), CustomAttributeArgument[] array => array.SelectMany(Values), _ => [] };
         var providers = new ICustomAttributeProvider[] { module, module.Assembly }.Concat(module.GetTypes().SelectMany(type => new ICustomAttributeProvider[] { type }
             .Concat(type.Fields).Concat(type.Properties).Concat(type.Events).Concat(type.Methods)
             .Concat(type.Interfaces).Concat(type.GenericParameters).Concat(type.GenericParameters.SelectMany(parameter => parameter.Constraints))
             .Concat(type.Methods.SelectMany(method => method.Parameters)).Concat(type.Methods.Select(method => method.MethodReturnType))
             .Concat(type.Methods.SelectMany(method => method.GenericParameters)).Concat(type.Methods.SelectMany(method => method.GenericParameters).SelectMany(parameter => parameter.Constraints))));
-        return providers.SelectMany(provider => provider.CustomAttributes).SelectMany(attribute => attribute.ConstructorArguments
+        return providers.SelectMany(provider => provider.CustomAttributes);
+    }
+    internal static IEnumerable<TypeReference> AttributeTypeArguments(ModuleDefinition module)
+    {
+        IEnumerable<TypeReference> Values(CustomAttributeArgument argument) => argument.Value switch
+        { TypeReference type => [type], CustomAttributeArgument nested => Values(nested), CustomAttributeArgument[] array => array.SelectMany(Values), _ => [] };
+        return AllCustomAttributes(module).SelectMany(attribute => attribute.ConstructorArguments
             .Concat(attribute.Fields.Select(field => field.Argument)).Concat(attribute.Properties.Select(property => property.Argument))).SelectMany(Values);
     }
     private void Rename(IMetadataTokenProvider subject, string fullName, string oldName, string kind, long seed, Action<string> rename)

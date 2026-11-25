@@ -41,12 +41,16 @@ public sealed class HiddenThreadsPass
     {
         uint workerStateRva = ctx.AllocData(32, 8);
         ctx.WriteData(workerStateRva + 24, BitConverter.GetBytes((ulong)MonitorIntervalMilliseconds));
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
             // Two saves and 0x28 bytes align every API call while retaining the
             // standard four-register shadow space.
-            a.PushR(Reg.Rbx).PushR(Reg.R15).SubRi(Reg.Rsp, 0x28);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.Rbx); pushes.Add((Reg.Rbx, (byte)a.Position));
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0x28);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva).AddRi(Reg.R15, checked((int)detectionState.Rva));
 
             // NtCurrentThread is the stable -2 pseudo-handle. No payload is
@@ -60,7 +64,7 @@ public sealed class HiddenThreadsPass
             a.MovRip(Reg.Rax, "worker_state", 8).IncR(Reg.Rax);
             a.MovRipStore(Reg.Rax, "worker_state", 8);
             a.MovRegPeb(Reg.Rbx).XorRr(Reg.Rax, Reg.Rax).MovRm8(Reg.Rax, Reg.Rbx, 2);
-            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "monitor_sleep");
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "monitor_sleep");
             a.MovRip(Reg.Rax, "worker_state", 16).IncR(Reg.Rax);
             a.MovRipStore(Reg.Rax, "worker_state", 16);
             RuntimeDetectionState.EmitRecord(
@@ -72,11 +76,12 @@ public sealed class HiddenThreadsPass
                 labelPrefix: "hidden_thread_debug");
             a.Label("monitor_sleep").MovRi(Reg.Rcx, MonitorIntervalMilliseconds);
             a.CallRip("ext::Sleep").Jmp("monitor_loop");
+            int codeEnd = a.Position;
 
             a.Align(8).Label("worker_state").Dq(0, 0, 0, (ulong)MonitorIntervalMilliseconds);
             a.Db(Encoding.ASCII.GetBytes("RMPT.HIDDEN.THREAD\0"));
             AntiDebugPass.AddExternalSlots(a, "NtSetInformationThread", "Sleep");
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x28, prologEnd));
         }
 
         return AntiDebugPass.WriteRoutine(ctx, Build, iat,
@@ -89,10 +94,13 @@ public sealed class HiddenThreadsPass
         uint workerRva)
     {
         uint launcherStateRva = ctx.AllocData(24, 8);
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.R15).SubRi(Reg.Rsp, 0x40);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0x40);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);
 
             // CreateThread(NULL, 0, worker, NULL, 0, &threadId). The worker does
@@ -117,10 +125,11 @@ public sealed class HiddenThreadsPass
             a.MovRipStore(Reg.Rax, "launcher_state", 16);
 
             a.Label("launcher_done").AddRi(Reg.Rsp, 0x40).PopR(Reg.R15).Ret();
+            int codeEnd = a.Position;
             a.Align(8).Label("launcher_state").Dq(0, 0, 0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.HIDDEN.LAUNCHER\0"));
             AntiDebugPass.AddExternalSlots(a, "CreateThread", "NtSetInformationThread", "CloseHandle");
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x40, prologEnd));
         }
 
         uint initRva = AntiDebugPass.WriteRoutine(ctx, Build, iat,

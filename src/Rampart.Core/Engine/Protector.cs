@@ -49,16 +49,18 @@ public sealed class Protector
 
         ProtectionCapabilities.Validate(settings, catalog);
 
-        // Threat dials bump knobs before anything reads levels.
-        ThreatDials.Apply(settings, catalog);
-        var concerns = ConcernRules.Evaluate(settings, catalog);
+        // Clone caller settings before applying threat dials so Protect never
+        // mutates the caller's ProtectionSettings instance.
+        ProtectionSettings effectiveSettings = CloneSettings(settings);
+        ThreatDials.Apply(effectiveSettings, catalog);
+        var concerns = ConcernRules.Evaluate(effectiveSettings, catalog);
 
         var pe = PeImage.Load(input);
         PeCompatibility.Validate(pe);
 
-        var ctx = new BuildContext(pe, settings, catalog, symbols);
+        var ctx = new BuildContext(pe, effectiveSettings, catalog, symbols);
         ctx.Analyze();
-        ProtectionCapabilities.ValidateEffectiveFunctionPolicies(settings, catalog, ctx.Functions);
+        ProtectionCapabilities.ValidateEffectiveFunctionPolicies(effectiveSettings, catalog, ctx.Functions);
         var packing = new SectionPackingPass();
         packing.Prepare(ctx); // Capture original loader ownership before metadata is scrubbed.
 
@@ -84,14 +86,16 @@ public sealed class Protector
         }
 
         // --- passes, in order ---------------------------------------------------
-        new VirtualizationPass().Run(ctx);
-        new ExceptionFlowPass().Run(ctx);
-        new ControlFlowFlatteningPass().Run(ctx); // VM ownership wins on overlapping selections.
-        new CodeTransformPass().Run(ctx);         // remaining selected native bodies and padding
+        // Cold analysis sections are added before .rmpt/.rmpd are allocated so
+        // dynamic stub/data growth never collides with a higher section's virtual address.
         RunAndRecord(() => new IdaBombPass().Run(ctx), "analysis.ida-bomb");
         RunAndRecord(() => new HexRaysDenialPass().Run(ctx), "analysis.hexrays-denial");
         RunAndRecord(() => new SymbolicDenialPass().Run(ctx), "analysis.symbolic-denial");
         RunAndRecord(() => new StaticDecodeDenialPass().Run(ctx), "analysis.static-decode-denial");
+        new VirtualizationPass().Run(ctx);
+        new ExceptionFlowPass().Run(ctx);
+        new ControlFlowFlatteningPass().Run(ctx); // VM ownership wins on overlapping selections.
+        new CodeTransformPass().Run(ctx);         // remaining selected native bodies and padding
         int beforeStrings = ctx.InitChain.Count;
         new StringProtectionPass().Run(ctx);
         // Byte rewriting still precedes import and integrity emission. Execution
@@ -99,8 +103,10 @@ public sealed class Protector
         // keys are consumed, and mapped-header scrubbing must happen afterward.
         uint[] stringInitializers = ctx.InitChain.Skip(beforeStrings).ToArray();
         ctx.InitChain.RemoveRange(beforeStrings, stringInitializers.Length);
-        RunAndRecord(() => new ApiConcealmentPass().Run(ctx), "memory.api-concealment");
+        // Run import concealment before API concealment so sensitive APIs can be
+        // both hash-resolved into private slots and routed through local tail thunks.
         new ImportConcealmentPass().Run(ctx);     // hash-resolved IAT, register resolver init
+        RunAndRecord(() => new ApiConcealmentPass().Run(ctx), "memory.api-concealment");
         RunAndRecord(() => new AntiDebugPass().Run(ctx),
             "anti-debug.channel-sweep", "anti-debug.inline-hook-check",
             "anti-debug.veh-tamper", "anti-debug.dll-notify");
@@ -108,7 +114,6 @@ public sealed class Protector
             "anti-sandbox.virtualisation-detect", "anti-sandbox.fingerprint-suite",
             "anti-sandbox.human-gate");
         RunAndRecord(() => new InjectionHunterPass().Run(ctx), "nuclear.injection-hunter");
-        RunAndRecord(() => new HiddenThreadsPass().Run(ctx), "integrity.hidden-threads");
         RunAndRecord(() => new SymbolScrubPass().Run(ctx), "packaging.symbol-scrub");
         RunAndRecord(() => new HeaderDisguisePass().Run(ctx), "packaging.header-disguise");
         var runtimeHardening = new RuntimeHardeningPass();
@@ -124,6 +129,9 @@ public sealed class Protector
             runtimeHardening.RegisterAfterStringInitializers(ctx);
         RunAndRecord(() => new RuntimeHeaderProtectionPass().Run(ctx),
             "analysis.runtime-header-corruption", "memory.anti-dump", "integrity.header-scrub");
+        // Launch background monitor threads only after startup string decryption
+        // and runtime header mutations have completed.
+        RunAndRecord(() => new HiddenThreadsPass().Run(ctx), "integrity.hidden-threads");
         packing.Run(ctx); // Its decoder must precede all other startup routines.
         RunAndRecord(() => new EntryPointPass().Run(ctx), "packaging.ep-confusion");
         runtimeHardening.RunAfterEntryPoint(ctx);      // outer TLS monitor after dispatcher exists
@@ -197,5 +205,45 @@ public sealed class Protector
                 }).ToList(),
             },
         };
+    }
+
+    private static ProtectionSettings CloneSettings(ProtectionSettings source)
+    {
+        var copy = new ProtectionSettings
+        {
+            Preset = source.Preset,
+            Seed = source.Seed,
+            Watermark = source.Watermark,
+            CustomMessage = source.CustomMessage,
+            PdbTool = source.PdbTool,
+            Targets = source.Targets,
+        };
+        foreach (KeyValuePair<string, ProtectionLevel> entry in source.Knobs)
+            copy.Knobs[entry.Key] = entry.Value;
+        foreach (string tag in source.ThreatFocus)
+            copy.ThreatFocus.Add(tag);
+        foreach (string symbol in source.IncludeSymbols)
+            copy.IncludeSymbols.Add(symbol);
+        foreach (string symbol in source.ExcludeSymbols)
+            copy.ExcludeSymbols.Add(symbol);
+        foreach (RvaRange range in source.IncludeRvaRanges)
+            copy.IncludeRvaRanges.Add(new RvaRange { Start = range.Start, End = range.End });
+        foreach (string path in source.SymbolSources)
+            copy.SymbolSources.Add(path);
+        foreach (ProtectionRule rule in source.Rules)
+        {
+            var clonedRule = new ProtectionRule
+            {
+                Scope = rule.Scope,
+                Match = rule.Match,
+                StartRva = rule.StartRva,
+                EndRva = rule.EndRva,
+                Preset = rule.Preset,
+            };
+            foreach (KeyValuePair<string, ProtectionLevel> k in rule.Knobs)
+                clonedRule.Knobs[k.Key] = k.Value;
+            copy.Rules.Add(clonedRule);
+        }
+        return copy;
     }
 }

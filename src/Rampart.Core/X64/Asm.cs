@@ -93,11 +93,23 @@ public sealed class Asm
         return this;
     }
 
-    /// <summary>Zero-pads to an alignment boundary (keeps label math simple for tables).</summary>
+    /// <summary>Pads code with INT3 (0xCC) to an alignment boundary.</summary>
     public Asm Align(int alignment)
     {
+        if (alignment <= 0)
+            throw new ArgumentOutOfRangeException(nameof(alignment), "Alignment must be positive.");
         while (_code.Count % alignment != 0)
             _code.Add(0xCC);
+        return this;
+    }
+
+    /// <summary>Zero-pads data tables to an alignment boundary.</summary>
+    public Asm AlignData(int alignment)
+    {
+        if (alignment <= 0)
+            throw new ArgumentOutOfRangeException(nameof(alignment), "Alignment must be positive.");
+        while (_code.Count % alignment != 0)
+            _code.Add(0x00);
         return this;
     }
 
@@ -164,6 +176,16 @@ public sealed class Asm
         // Opcode 89 encodes the source in ModRM.reg and destination in
         // ModRM.r/m, so REX.R extends src and REX.B extends dst.
         _code.Add(Rex(r: src, rm: dst));
+        _code.Add(0x89);
+        _code.Add(ModRm(3, src, dst));
+        return this;
+    }
+
+    /// <summary>32-bit register move (zero-extends into the 64-bit destination).</summary>
+    public Asm Mov32Rr(Reg dst, Reg src)
+    {
+        if (dst >= Reg.R8 || src >= Reg.R8)
+            _code.Add(Rex(w: false, r: src, rm: dst));
         _code.Add(0x89);
         _code.Add(ModRm(3, src, dst));
         return this;
@@ -382,9 +404,29 @@ public sealed class Asm
         return this;
     }
 
+    /// <summary>32-bit subtraction (wraps modulo 2^32 and zero-extends into dst).</summary>
+    public Asm Sub32Rr(Reg dst, Reg src)
+    {
+        if (dst >= Reg.R8 || src >= Reg.R8)
+            _code.Add(Rex(w: false, r: src, rm: dst));
+        _code.Add(0x29);
+        _code.Add(ModRm(3, src, dst));
+        return this;
+    }
+
     public Asm CmpRr(Reg a, Reg b)
     {
         _code.Add(Rex(r: b, rm: a));
+        _code.Add(0x39);
+        _code.Add(ModRm(3, b, a));
+        return this;
+    }
+
+    /// <summary>32-bit register comparison (ignores upper 32 bits of both operands).</summary>
+    public Asm Cmp32Rr(Reg a, Reg b)
+    {
+        if (a >= Reg.R8 || b >= Reg.R8)
+            _code.Add(Rex(w: false, r: b, rm: a));
         _code.Add(0x39);
         _code.Add(ModRm(3, b, a));
         return this;
@@ -427,19 +469,24 @@ public sealed class Asm
         return this;
     }
 
+    /// <summary>32-bit register test (appropriate for Win32 BOOL, DWORD, and NTSTATUS values).</summary>
+    public Asm Test32Rr(Reg a, Reg b)
+    {
+        if (a >= Reg.R8 || b >= Reg.R8)
+            _code.Add(Rex(w: false, r: b, rm: a));
+        _code.Add(0x85);
+        _code.Add(ModRm(3, b, a));
+        return this;
+    }
+
     public Asm TestRi8(Reg r, byte mask)
     {
-        if (r < Reg.R8)
-        {
-            _code.Add(0xF6);
-            _code.Add(ModRm(3, Reg.Rax /* /0 */, r));
-        }
-        else
-        {
-            _code.Add(0x41);
-            _code.Add(0xF6);
-            _code.Add(ModRm(3, Reg.Rax, r));
-        }
+        // In 64-bit mode, ModRM r/m 4..7 selects AH/CH/DH/BH unless a REX
+        // prefix is present, in which case it selects SPL/BPL/SIL/DIL.
+        if (r >= Reg.Rsp)
+            _code.Add(Rex(w: false, rm: r));
+        _code.Add(0xF6);
+        _code.Add(ModRm(3, Reg.Rax /* /0 */, r));
         _code.Add(mask);
         return this;
     }
@@ -450,6 +497,8 @@ public sealed class Asm
 
     private Asm Shift(Reg r, int count, int opExtension)
     {
+        if (count is < 0 or > 63)
+            throw new ArgumentOutOfRangeException(nameof(count), "64-bit shift count must be in 0..63.");
         _code.Add(Rex(w: true, rm: r));
         _code.Add(0xC1);
         _code.Add(ModRm(3, (Reg)opExtension, r));
@@ -512,8 +561,10 @@ public sealed class Asm
     /// <summary>Raw short jcc over the next N bytes (no label bookkeeping).</summary>
     public Asm JccShortOver(Cc cc, int bytes)
     {
+        if (bytes is < sbyte.MinValue or > sbyte.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(bytes), "Short branch displacement must fit in a signed byte.");
         _code.Add((byte)(0x70 + (int)cc));
-        _code.Add((byte)bytes);
+        _code.Add(unchecked((byte)(sbyte)bytes));
         return this;
     }
 
@@ -601,44 +652,39 @@ public sealed class Asm
     public Asm Rdtsc() { _code.Add(0x0F); _code.Add(0x31); return this; }
     public Asm Cpuid() { _code.Add(0x0F); _code.Add(0xA2); return this; }
 
-    /// <summary>Swaps GS-based PEB access result into reg: mov reg, gs:[0x60].</summary>
+    /// <summary>Reads the process PEB pointer from GS:[0x60] into reg.</summary>
     public Asm MovRegPeb(Reg reg)
     {
-        // 65 48 8B 04 25 60 00 00 00
+        // 65 REX.W 8B ModRM(00, reg, 100/SIB) 25 60 00 00 00 -> mov reg, qword ptr gs:[0x60]
         _code.Add(0x65);
         _code.Add(Rex(r: reg));
         _code.Add(0x8B);
-        _code.Add(0x04);
+        _code.Add(ModRm(0, reg, Reg.Rsp));
         _code.Add(0x25);
         Ddw(0x60);
         return this;
     }
 
-    /// <summary>Emits the classic runtime-base derivation: after this, reg holds
-    /// the runtime image base (works under ASLR, no relocations needed).
-    /// `ourRva` = RVA of this blob's start in the image. Position-aware: the
-    /// subtracted constant is fixed up against the emitted position at assembly
-    /// time, so this may be emitted anywhere in the blob.</summary>
+    /// <summary>Computes the runtime image base into reg using RIP-relative
+    /// addressing (works under ASLR without relocations and without unbalancing
+    /// the CET shadow stack or return-stack buffer). `ourRva` is the RVA of this
+    /// blob's start in the image.</summary>
     public Asm LoadRuntimeBase(Reg reg, uint ourRva)
     {
-        // call $+5 ; pop reg ; reg -= RVA(next instruction)
-        string anchor = $"__lrb_{_runtimeBaseAnchors.Count}";
-        _code.Add(0xE8);
-        Ddw(0);
-        // CALL pushes the address immediately after its five-byte encoding.
-        // Anchor that exact address before emitting POP; anchoring after POP
-        // subtracts one or two extra bytes and produces base-1/base-2.
-        Label(anchor);
-        PopR(reg);
-        // SubRi emits REX(1) + 0x81(1) + ModRm(1) before the imm32 — the fixup
-        // position recorded here is the imm32 operand, three bytes past the
-        // current end of code.
-        _runtimeBaseAnchors.Add((_code.Count + 3, anchor, ourRva));
-        SubRi(reg, 0); // imm32 patched at assembly time
+        // lea reg, [rip - (ourRva + nextOffset)]
+        // RIP points to the byte immediately after this 7-byte instruction, so
+        // RIP - RVA(next) == runtime ImageBase without any CALL/POP mismatch.
+        long nextRva = (long)ourRva + _code.Count + 7;
+        long disp = -nextRva;
+        if (disp is < int.MinValue or > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(ourRva), "Image base exceeds RIP-relative disp32 range.");
+
+        _code.Add(Rex(r: reg));
+        _code.Add(0x8D);
+        _code.Add(ModRm(0, reg, Reg.Rbp)); // mod=00, rm=101 -> RIP-relative
+        Ddw(unchecked((uint)(int)disp));
         return this;
     }
-
-    private readonly List<(int Pos, string Anchor, uint OurRva)> _runtimeBaseAnchors = [];
 
     // ---- Assembly -------------------------------------------------------------------
 
@@ -660,12 +706,6 @@ public sealed class Asm
                 throw new KeyNotFoundException($"RIP-relative reference to undefined label '{target}'.");
             int disp = to + extra - (pos + 4);
             BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(pos), disp);
-        }
-        foreach (var (pos, anchor, ourRva) in _runtimeBaseAnchors)
-        {
-            // reg currently holds runtimeVA(label) = base + ourRva + labelOffset.
-            int sub = (int)ourRva + _labels[anchor];
-            BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(pos), sub);
         }
         return result;
     }

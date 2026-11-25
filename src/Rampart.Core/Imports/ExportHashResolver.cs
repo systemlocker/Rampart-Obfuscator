@@ -32,19 +32,38 @@ public static class ExportHashResolver
         a.MovRr(Reg.R13, Reg.R8);
         a.MovRr(Reg.R14, Reg.R9);
         a.TestRr(Reg.Rbx, Reg.Rbx); a.Jcc(Cc.E, "fail");
-        // The input is a real loader-mapped image, not an arbitrary byte buffer.
-        // Bounds below reject absent/invalid export arrays and unterminated names.
-        a.MovRm32(Reg.Rax, Reg.Rbx, 0x3C);
-        a.MovRi(Reg.Rdx, 0x100000); a.CmpRr(Reg.Rax, Reg.Rdx); a.Jcc(Cc.A, "fail");
+        a.TestRr(Reg.R12, Reg.R12); a.Jcc(Cc.E, "fail");
+        a.TestRr(Reg.R14, Reg.R14); a.Jcc(Cc.E, "fail");
+        // Validate DOS/PE32+ header markers and export-directory bounds before
+        // traversing export arrays so malformed or non-PE32+ handles fail cleanly.
+        a.MovRm32(Reg.Rax, Reg.Rbx);
+        a.AndRi(Reg.Rax, 0xFFFF);
+        a.Mov32Ri(Reg.Rdx, 0x5A4D); // "MZ"
+        a.Cmp32Rr(Reg.Rax, Reg.Rdx); a.Jcc(Cc.Ne, "fail");
+        a.MovRm32(Reg.Rax, Reg.Rbx, 0x3C); // e_lfanew
+        a.Mov32Ri(Reg.Rdx, 0x40); a.Cmp32Rr(Reg.Rax, Reg.Rdx); a.Jcc(Cc.B, "fail");
+        a.Mov32Ri(Reg.Rdx, 0x100000); a.Cmp32Rr(Reg.Rax, Reg.Rdx); a.Jcc(Cc.A, "fail");
         a.AddRr(Reg.Rax, Reg.Rbx);
+        a.MovRm32(Reg.Rdx, Reg.Rax);
+        a.Mov32Ri(Reg.Rcx, 0x00004550); // "PE\0\0"
+        a.Cmp32Rr(Reg.Rdx, Reg.Rcx); a.Jcc(Cc.Ne, "fail");
+        a.MovRm32(Reg.Rdx, Reg.Rax, 0x18); // OptionalHeader.Magic
+        a.AndRi(Reg.Rdx, 0xFFFF);
+        a.Mov32Ri(Reg.Rcx, 0x020B); // PE32+
+        a.Cmp32Rr(Reg.Rdx, Reg.Rcx); a.Jcc(Cc.Ne, "fail");
+        a.MovRm32(Reg.Rdx, Reg.Rax, 0x84); // NumberOfRvaAndSizes
+        a.Test32Rr(Reg.Rdx, Reg.Rdx); a.Jcc(Cc.E, "fail");
         a.MovRm32(Reg.R15, Reg.Rax, 0x50); // NT header + OptionalHeader.SizeOfImage
+        a.MovRm32(Reg.Rcx, Reg.Rax, 0x8C); // PE32+ export directory Size
+        a.Mov32Ri(Reg.Rdx, 40); a.Cmp32Rr(Reg.Rcx, Reg.Rdx); a.Jcc(Cc.B, "fail");
         a.MovRm32(Reg.Rdx, Reg.Rax, 0x88); // PE32+ export directory RVA
-        a.TestRr(Reg.Rdx, Reg.Rdx); a.Jcc(Cc.E, "fail");
+        a.Test32Rr(Reg.Rdx, Reg.Rdx); a.Jcc(Cc.E, "fail");
         a.MovRr(Reg.Rax, Reg.Rdx); a.AddRi(Reg.Rax, 40);
         a.CmpRr(Reg.Rax, Reg.R15); a.Jcc(Cc.A, "fail");
         a.AddRr(Reg.Rdx, Reg.Rbx);
         a.MovRm32(Reg.Rdi, Reg.Rdx, 24); // NumberOfNames
         a.MovRm32(Reg.Rsi, Reg.Rdx, 32); // AddressOfNames
+        a.Test32Rr(Reg.Rsi, Reg.Rsi); a.Jcc(Cc.E, "fail");
         a.MovRr(Reg.Rax, Reg.Rdi); a.ShlRi(Reg.Rax, 2); a.AddRr(Reg.Rax, Reg.Rsi);
         a.CmpRr(Reg.Rax, Reg.R15); a.Jcc(Cc.A, "fail");
         a.AddRr(Reg.Rsi, Reg.Rbx);
@@ -52,6 +71,7 @@ public static class ExportHashResolver
         a.Label("next");
         a.TestRr(Reg.Rdi, Reg.Rdi); a.Jcc(Cc.E, "fail");
         a.MovRm32(Reg.Rbp, Reg.Rsi);
+        a.Test32Rr(Reg.Rbp, Reg.Rbp); a.Jcc(Cc.E, "advance");
         a.AddRr(Reg.Rbp, Reg.Rbx);
         a.MovRr(Reg.Rdx, Reg.Rbp);
         a.MovRi(Reg.Rax, unchecked((long)seed));

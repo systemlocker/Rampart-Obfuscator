@@ -44,4 +44,6 @@ public sealed class ManagedProtectionException : InvalidOperationException
     public string ReasonCode { get; }
     public ManagedProtectionException(string reasonCode, string message) : base($"{reasonCode}: {message}")
         => ReasonCode = reasonCode;
+    public ManagedProtectionException(string reasonCode, string message, Exception innerException) : base($"{reasonCode}: {message}", innerException)
+        => ReasonCode = reasonCode;
 }

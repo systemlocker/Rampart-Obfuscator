@@ -16,11 +16,24 @@ internal static class RuntimeTemplate
         // same immutable interned value. Later calls need no lock or allocation.
         var existing = cached;
         if (existing is not null) return existing;
-        var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)!;
-        stream.Position = offset;
+        if (offset < 0 || length < 0 || length % 2 != 0)
+            throw new InvalidDataException("The protected resource is invalid.");
         var bytes = new byte[length];
-        for (var i = 0; i < bytes.Length; i++) bytes[i] = (byte)(stream.ReadByte() ^ (key + i * 31));
-        stream.Dispose();
+        using (var stream = typeof(RuntimeTemplate).Assembly.GetManifestResourceStream(resource)
+            ?? throw new InvalidDataException("The protected resource is missing."))
+        {
+            if (offset > stream.Length - length)
+                throw new InvalidDataException("The protected resource is truncated.");
+            stream.Position = offset;
+            var read = 0;
+            while (read < bytes.Length)
+            {
+                var count = stream.Read(bytes, read, bytes.Length - read);
+                if (count == 0) throw new InvalidDataException("The protected resource is truncated.");
+                read += count;
+            }
+        }
+        for (var i = 0; i < bytes.Length; i++) bytes[i] ^= (byte)(key + i * 31);
         // ldstr returns interned strings. Retaining that behavior also retains plaintext
         // for the lifetime of its intern pool; this is obfuscation, not secret storage.
         var characters = new char[bytes.Length / 2];
@@ -32,9 +45,12 @@ internal static class RuntimeTemplate
 
     internal static void Verify(string resource, string expected)
     {
-        var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)!;
-        var digest = SHA256.HashData(stream);
-        stream.Dispose();
+        byte[] digest;
+        using (var stream = typeof(RuntimeTemplate).Assembly.GetManifestResourceStream(resource)
+            ?? throw new InvalidDataException("The protected resource is missing."))
+        {
+            digest = SHA256.HashData(stream);
+        }
         if (Convert.ToHexString(digest) != expected)
             throw new InvalidDataException("The protected resource failed its integrity check.");
     }
@@ -160,10 +176,13 @@ internal static class FrameworkIntegrityTemplate
 {
     internal static void Verify(string resource, string expected)
     {
-        var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)!;
-        var algorithm = SHA256.Create();
-        var digest = algorithm.ComputeHash(stream);
-        algorithm.Dispose(); stream.Dispose();
+        byte[] digest;
+        using (var stream = typeof(FrameworkIntegrityTemplate).Assembly.GetManifestResourceStream(resource)
+            ?? throw new InvalidDataException("The protected resource is missing."))
+        using (var algorithm = SHA256.Create())
+        {
+            digest = algorithm.ComputeHash(stream);
+        }
         var characters = new char[digest.Length * 2];
         const string alphabet = "0123456789ABCDEF";
         for (var i = 0; i < digest.Length; i++)

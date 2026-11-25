@@ -49,7 +49,7 @@ internal sealed class SettingsArguments
                 };
                 return true;
             case "--compatibility":
-                if (!Enum.TryParse(RequireValue(args, ref index, arg), true, out CompatibilityPolicy policy) || !Enum.IsDefined(policy))
+                if (!TryParseEnumName(RequireValue(args, ref index, arg), out CompatibilityPolicy policy))
                     throw new ArgumentException("RP_COMPATIBILITY_OPTION: Expected preserve, warn, or strict.");
                 _compatibility = policy;
                 return true;
@@ -58,7 +58,7 @@ internal sealed class SettingsArguments
                 return true;
             case "--seed":
                 string rawSeed = RequireValue(args, ref index, arg);
-                if (!long.TryParse(rawSeed, out long seed))
+                if (!long.TryParse(rawSeed, NumberStyles.Integer, CultureInfo.InvariantCulture, out long seed))
                     throw new ArgumentException($"Invalid seed '{rawSeed}'. Expected a signed 64-bit integer.");
                 _seed = seed;
                 return true;
@@ -76,7 +76,8 @@ internal sealed class SettingsArguments
                 return true;
             case "--focus":
                 _focus.AddRange(RequireValue(args, ref index, arg)
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(tag => tag.ToLowerInvariant()));
                 return true;
             case "--symbols" or "--map" or "--pdb":
                 _symbolSources.Add(RequireValue(args, ref index, arg));
@@ -157,7 +158,8 @@ internal sealed class SettingsArguments
         // Bulk selectors establish a profile first. Exact --set overrides then
         // win, while --disable is deliberately final and may expose an invalid
         // dependency combination for the normal validator to explain.
-        var target = detectedTarget ?? settings.Targets?.Override ?? ProtectionTargetKind.NativePe;
+        var target = ResolveTargetKind(settings, detectedTarget);
+        ValidateTargetOptionConflicts(settings, target);
         if (target == ProtectionTargetKind.ManagedIl && (_preset is not null || configuredPreset))
             throw new NotSupportedException("RP_MANAGED_PRESET_UNSUPPORTED: Native presets do not apply to managed IL. Select managed protections explicitly.");
         if (_only.Count > 0)
@@ -169,12 +171,33 @@ internal sealed class SettingsArguments
         ProtectionSelection.Disable(settings, catalog, _disabled);
         foreach (string tag in _focus)
         {
-            if (!settings.ThreatFocus.Contains(tag, StringComparer.Ordinal))
+            if (!settings.ThreatFocus.Contains(tag, StringComparer.OrdinalIgnoreCase))
                 settings.ThreatFocus.Add(tag);
         }
 
         TargetCapabilities.ValidateSettings(settings, catalog, target);
         return settings;
+    }
+
+    internal static ProtectionTargetKind ResolveTargetKind(ProtectionSettings settings, ProtectionTargetKind? detectedTarget)
+    {
+        if (detectedTarget is { } detected) return detected;
+        if (settings.Targets?.Override is { } configured) return configured;
+        if (settings.Targets?.Managed is not null && settings.Targets?.NativeAot is null) return ProtectionTargetKind.ManagedIl;
+        if (settings.Targets?.NativeAot is not null && settings.Targets?.Managed is null) return ProtectionTargetKind.NativeAot;
+        return ProtectionTargetKind.NativePe;
+    }
+
+    private static void ValidateTargetOptionConflicts(ProtectionSettings settings, ProtectionTargetKind target)
+    {
+        if (settings.Targets?.Managed is not null && settings.Targets?.NativeAot is not null)
+            throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: Managed and NativeAOT target options cannot be combined.");
+        if (target == ProtectionTargetKind.NativePe && (settings.Targets?.Managed is not null || settings.Targets?.NativeAot is not null))
+            throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: Managed or NativeAOT options conflict with the native PE target.");
+        if (target == ProtectionTargetKind.ManagedIl && settings.Targets?.NativeAot is not null)
+            throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: NativeAOT options conflict with the managed IL target.");
+        if (target == ProtectionTargetKind.NativeAot && settings.Targets?.Managed is not null)
+            throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: Managed options conflict with the NativeAOT target.");
     }
 
     internal static JsonObject SettingsPayload(ProtectionSettings settings, ProtectionTargetKind target)
@@ -209,13 +232,23 @@ internal sealed class SettingsArguments
 
     private static ProtectionLevel ParseLevel(string rawLevel)
     {
-        if (!Enum.TryParse(rawLevel, ignoreCase: true, out ProtectionLevel level)
-            || !Enum.IsDefined(level))
+        if (!TryParseEnumName(rawLevel, out ProtectionLevel level))
         {
             throw new ArgumentException(
                 $"Invalid protection level '{rawLevel}'. Valid: {string.Join(", ", Enum.GetNames<ProtectionLevel>())}.");
         }
         return level;
+    }
+
+    // Reject numeric strings (e.g. "99") and comma-separated flag lists that
+    // Enum.TryParse would otherwise accept.
+    private static bool TryParseEnumName<TEnum>(string raw, out TEnum value) where TEnum : struct, Enum
+    {
+        value = default;
+        if (string.IsNullOrWhiteSpace(raw) || raw.Contains(',')
+            || long.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+            return false;
+        return Enum.TryParse(raw.Trim(), ignoreCase: true, out value) && Enum.IsDefined(value);
     }
 
     private static void ParseIds(string value, List<string> destination, string option)
@@ -263,11 +296,24 @@ internal sealed class SettingsArguments
     {
         for (int i = 0; i < settings.SymbolSources.Count; i++)
         {
-            if (!Path.IsPathRooted(settings.SymbolSources[i]))
+            if (!Path.IsPathFullyQualified(settings.SymbolSources[i]))
                 settings.SymbolSources[i] = Path.GetFullPath(Path.Combine(configDirectory, settings.SymbolSources[i]));
         }
-        if (settings.PdbTool is not null && !Path.IsPathRooted(settings.PdbTool))
+        if (settings.PdbTool is not null && !Path.IsPathFullyQualified(settings.PdbTool))
             settings.PdbTool = Path.GetFullPath(Path.Combine(configDirectory, settings.PdbTool));
+        if (settings.Targets?.Managed?.Verification is { } verification)
+        {
+            for (int i = 0; i < verification.ReferencePaths.Count; i++)
+            {
+                if (!Path.IsPathFullyQualified(verification.ReferencePaths[i]))
+                    verification.ReferencePaths[i] = Path.GetFullPath(Path.Combine(configDirectory, verification.ReferencePaths[i]));
+            }
+            for (int i = 0; i < verification.FrameworkReferencePaths.Count; i++)
+            {
+                if (!Path.IsPathFullyQualified(verification.FrameworkReferencePaths[i]))
+                    verification.FrameworkReferencePaths[i] = Path.GetFullPath(Path.Combine(configDirectory, verification.FrameworkReferencePaths[i]));
+            }
+        }
     }
 
     internal static string RequireValue(string[] args, ref int index, string option)

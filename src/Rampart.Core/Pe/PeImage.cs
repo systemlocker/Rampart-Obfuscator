@@ -15,10 +15,14 @@ public sealed class PeImage
 
     private byte[] _dosHeaderAndStub = [];   // everything before the PE signature
     private byte[] _optionalHeader = [];     // raw optional header (PE32+ = 240 bytes)
+    private byte[] _headerSlack = [];        // bytes between section table and SizeOfHeaders (e.g. BoundImport)
+    private int _headerSlackOffset;          // file offset where _headerSlack originally began
     private byte[] _overlay = [];            // bytes after the final section (assets/certificates)
     private uint _originalCoffSymbolPointer;
     private uint _originalCoffSymbolCount;
     private long _originalOverlayStart;
+
+    internal int DosHeaderLength => _dosHeaderAndStub.Length;
 
     public MachineType Machine { get; set; }
     public ushort NumberOfSections { get; set; }
@@ -88,7 +92,7 @@ public sealed class PeImage
     /// decoy-planting area — not covered by any section).</summary>
     public void WriteDosStub(int offset, ReadOnlySpan<byte> data)
     {
-        if (offset < 0 || offset + data.Length > _dosHeaderAndStub.Length)
+        if (offset < 0 || data.Length > _dosHeaderAndStub.Length - offset)
             throw new ArgumentOutOfRangeException(nameof(offset));
         data.CopyTo(_dosHeaderAndStub.AsSpan(offset));
     }
@@ -104,7 +108,7 @@ public sealed class PeImage
             throw new ArgumentOutOfRangeException(nameof(index));
         if ((uint)index >= NumberOfRvaAndSizes)
             return new DataDirectory(0, 0);
-        var off = DataDirectoryOffset(index);
+        int off = DataDirectoryOffset(index);
         if (off > _optionalHeader.Length - 8)
             throw new BadImageFormatException("Data-directory count exceeds the optional header.");
         return new DataDirectory(ReadU32InOptional(off), ReadU32InOptional(off + 4));
@@ -114,7 +118,7 @@ public sealed class PeImage
     {
         if (index < 0)
             throw new ArgumentOutOfRangeException(nameof(index));
-        var off = DataDirectoryOffset(index);
+        int off = DataDirectoryOffset(index);
         if (off > _optionalHeader.Length - 8)
             throw new NotSupportedException("The optional header has no storage for that data directory.");
         if ((uint)index >= NumberOfRvaAndSizes)
@@ -131,10 +135,9 @@ public sealed class PeImage
 
     private int DataDirectoryOffset(int index)
     {
-        // Data directories start at offset 112 in PE32+ (96 in PE32+ there is no
-        // BaseOfData difference ahead of them beyond width; 96+16 for PE32).
+        // Data directories start at offset 112 in PE32+ (96 in PE32).
         int baseOff = IsPe32Plus ? 112 : 96;
-        return baseOff + index * 8;
+        return checked(baseOff + checked(index * 8));
     }
 
     private ushort ReadU16InOptional(int offset) => BinaryPrimitives.ReadUInt16LittleEndian(_optionalHeader.AsSpan(offset));
@@ -153,11 +156,12 @@ public sealed class PeImage
     /// decoy data without serialization erasing it again.</summary>
     public void ScrubDosStubContent()
     {
-        if (_dosHeaderAndStub.Length <= 0x40)
+        if (_dosHeaderAndStub.Length < 0x40)
             return;
 
         _dosHeaderAndStub.AsSpan(2, 0x3A).Clear();
-        _dosHeaderAndStub.AsSpan(0x40).Clear();
+        if (_dosHeaderAndStub.Length > 0x40)
+            _dosHeaderAndStub.AsSpan(0x40).Clear();
         ScrubDosStub = false;
     }
 
@@ -176,7 +180,7 @@ public sealed class PeImage
 
         var pe = new PeImage();
         int lfanew = BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(0x3C));
-        if (lfanew <= 0 || lfanew + 4 + 20 > file.Length)
+        if (lfanew < 0x40 || lfanew > file.Length - 24)
             throw new BadImageFormatException("e_lfanew out of range.");
 
         if (BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(lfanew)) != PeSignature)
@@ -212,11 +216,17 @@ public sealed class PeImage
             throw new BadImageFormatException("Data-directory count exceeds the optional header.");
 
         int st = oh + pe.SizeOfOptionalHeader;
-        int sectionTableBytes = pe.NumberOfSections * 40;
+        int sectionTableBytes = checked(pe.NumberOfSections * 40);
         if (st > file.Length - sectionTableBytes)
             throw new BadImageFormatException("Section table truncated.");
-        if (pe.SizeOfHeaders < st + sectionTableBytes || pe.SizeOfHeaders > file.Length)
+        int sectionTableEnd = checked(st + sectionTableBytes);
+        if (pe.SizeOfHeaders < (uint)sectionTableEnd || pe.SizeOfHeaders > (uint)file.Length)
             throw new BadImageFormatException("SizeOfHeaders does not contain the complete PE headers.");
+        if ((int)pe.SizeOfHeaders > sectionTableEnd)
+        {
+            pe._headerSlackOffset = sectionTableEnd;
+            pe._headerSlack = file[sectionTableEnd..(int)pe.SizeOfHeaders];
+        }
 
         for (int i = 0; i < pe.NumberOfSections; i++)
         {
@@ -232,6 +242,8 @@ public sealed class PeImage
             };
             if (sec.SizeOfRawData > 0)
             {
+                if (sec.PointerToRawData < pe.SizeOfHeaders)
+                    throw new BadImageFormatException($"Section '{sec.Name}' raw data overlaps PE headers.");
                 ulong sectionEnd = (ulong)sec.PointerToRawData + sec.SizeOfRawData;
                 if (sectionEnd > (uint)file.Length)
                     throw new BadImageFormatException($"Section '{sec.Name}' raw data out of range.");
@@ -246,7 +258,7 @@ public sealed class PeImage
 
         long rawEnd = Math.Max(
             pe.SizeOfHeaders,
-            pe.Sections.Count == 0 ? 0 : pe.Sections.Max(s => (long)s.PointerToRawData + s.SizeOfRawData));
+            pe.Sections.Count == 0 ? 0 : pe.Sections.Max(s => s.SizeOfRawData == 0 ? 0L : (long)s.PointerToRawData + s.SizeOfRawData));
         if (rawEnd < file.Length)
             pe._overlay = file[(int)rawEnd..];
         pe._originalOverlayStart = rawEnd;
@@ -404,6 +416,34 @@ public sealed class PeImage
         return Encoding.UTF8.GetString(span[..len]);
     }
 
+    /// <summary>Returns the exact byte length (excluding NUL) of a NUL-terminated string at an RVA.</summary>
+    internal int ReadCStringByteLength(uint rva)
+    {
+        int off = RvaToOffset(rva);
+        var sec = SectionFromRva(rva)!;
+        var span = sec.Data.AsSpan(off - (int)sec.PointerToRawData);
+        int len = span.IndexOf((byte)0);
+        if (len < 0)
+            throw new BadImageFormatException($"String at RVA {rva:X8} is not NUL-terminated in its section.");
+        return len;
+    }
+
+    /// <summary>Reads bytes from either the PE header window (such as header-resident
+    /// BoundImport tables) or a mapped section RVA.</summary>
+    internal byte[] ReadHeaderOrRva(uint rva, int length)
+    {
+        if (length < 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
+        if (rva < SizeOfHeaders)
+        {
+            if ((ulong)rva + (uint)length > SizeOfHeaders)
+                throw new ArgumentOutOfRangeException(nameof(length), $"Header read at RVA {rva:X8} exceeds SizeOfHeaders.");
+            byte[] header = BuildHeaderBytes();
+            return header[(int)rva..((int)rva + length)];
+        }
+        return ReadRva(rva, length);
+    }
+
     // ---- Section management -------------------------------------------------------
 
     /// <summary>Appends a new section (virtual+raw) at the end of the image and
@@ -416,6 +456,8 @@ public sealed class PeImage
             throw new ArgumentException("Section name limited to 8 bytes.", nameof(name));
         if (virtualSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualSize), "Section size must be positive.");
+        if (Sections.Count >= ushort.MaxValue)
+            throw new InvalidOperationException("PE image cannot contain more than 65535 sections.");
 
         uint fileAlign = FileAlignment;
         uint sectAlign = SectionAlignment;
@@ -424,28 +466,43 @@ public sealed class PeImage
 
         long oldRawEnd = Math.Max(
             SizeOfHeaders,
-            Sections.Count == 0 ? 0 : Sections.Max(s => (long)s.PointerToRawData + s.SizeOfRawData));
+            Sections.Count == 0 ? 0 : Sections.Max(s => s.SizeOfRawData == 0 ? 0L : (long)s.PointerToRawData + s.SizeOfRawData));
         DataDirectory securityBefore = Directory(DataDir.Security);
 
         int tableStart = DosAndNtHeaderSize + (int)SizeOfOptionalHeader;
-        int tableBytes = (NumberOfSections + 1) * 40;
-        EnsureSectionTableCapacity(checked(tableStart + tableBytes), fileAlign);
+        int tableBytes = checked((Sections.Count + 1) * 40);
+        int newTableEnd = checked(tableStart + tableBytes);
+
+        // If a live header-resident BoundImport directory sits directly behind
+        // the section table, adding a section header would overwrite it in place.
+        DataDirectory boundImport = Directory(DataDir.BoundImport);
+        if (!boundImport.IsEmpty && boundImport.RelativeVirtualAddress < SizeOfHeaders
+            && boundImport.RelativeVirtualAddress < (uint)newTableEnd)
+        {
+            throw new NotSupportedException(
+                "Adding a section would overwrite a header-resident BoundImport directory.");
+        }
+
+        EnsureSectionTableCapacity(newTableEnd, fileAlign);
 
         long overlayStartBeforeSection = Math.Max(
             SizeOfHeaders,
             Sections.Count == 0 ? 0 : Sections.Max(s =>
-                (long)s.PointerToRawData + s.SizeOfRawData));
+                s.SizeOfRawData == 0 ? 0L : (long)s.PointerToRawData + s.SizeOfRawData));
 
-        // Raw placement: end of file rounded up.
-        uint rawEnd = Sections.Count > 0
-            ? Sections.Max(s => s.PointerToRawData + s.SizeOfRawData)
-            : Math.Max(SizeOfHeaders, fileAlign);
+        // Raw placement: end of existing file-backed sections (never below SizeOfHeaders,
+        // even if all existing sections are zero-raw-size BSS sections).
+        uint rawEnd = Math.Max(
+            SizeOfHeaders,
+            Sections.Count > 0
+                ? Sections.Max(s => s.SizeOfRawData == 0 ? 0u : checked(s.PointerToRawData + s.SizeOfRawData))
+                : fileAlign);
         uint rawPtr = AlignUp(rawEnd, fileAlign);
         uint rawSize = AlignUp((uint)virtualSize, fileAlign);
 
         // Virtual placement: end of image rounded up.
         uint virtEnd = Sections.Count > 0
-            ? Sections.Max(s => s.VirtualAddress + s.ResolvedVirtualSize)
+            ? Sections.Max(s => checked(s.VirtualAddress + s.ResolvedVirtualSize))
             : sectAlign;
         uint virtAddr = AlignUp(virtEnd, sectAlign);
 
@@ -460,9 +517,9 @@ public sealed class PeImage
             Data = new byte[rawSize],
         };
         Sections.Add(sec);
-        NumberOfSections++;
+        NumberOfSections = checked((ushort)Sections.Count);
 
-        SizeOfImage = AlignUp(virtAddr + rawSize, sectAlign);
+        SizeOfImage = Math.Max(SizeOfImage, AlignUp(checked(virtAddr + Math.Max((uint)virtualSize, rawSize)), sectAlign));
         long newOverlayStart = (long)rawPtr + rawSize;
         if (_overlay.Length > 0 && newOverlayStart > overlayStartBeforeSection)
         {
@@ -497,7 +554,7 @@ public sealed class PeImage
         SizeOfHeaders = newHeaders;
     }
 
-    private void AdjustDebugRawPointers(uint firstMovedOffset, uint delta)
+    internal void AdjustDebugRawPointers(uint firstMovedOffset, uint delta)
     {
         if (delta == 0)
             return;
@@ -509,7 +566,7 @@ public sealed class PeImage
         int count = checked((int)(debug.Size / 28));
         for (int i = 0; i < count; i++)
         {
-            uint descriptorRva = debug.RelativeVirtualAddress + (uint)(i * 28);
+            uint descriptorRva = checked(debug.RelativeVirtualAddress + (uint)(i * 28));
             byte[] descriptor = ReadRva(descriptorRva, 28);
             uint rawPointer = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(24));
             if (rawPointer < firstMovedOffset || rawPointer == 0)
@@ -527,31 +584,29 @@ public sealed class PeImage
             ? throw new ArgumentOutOfRangeException(nameof(alignment))
             : checked((uint)(((ulong)value + alignment - 1) / alignment * alignment));
 
-    // ---- Serialization ---------------------------------------------------------
-
-    /// <summary>Rebuilds the file: DOS header+stub, PE signature, file header,
-    /// optional header, section table, then each section's raw data at its
-    /// recorded file offset.</summary>
-    public byte[] ToBytes()
+    private byte[] BuildHeaderBytes()
     {
-        long sectionEnd = Math.Max(
-            SizeOfHeaders,
-            Sections.Count == 0 ? 0 : Sections.Max(s => (long)s.PointerToRawData + s.SizeOfRawData));
-        long fileSize = sectionEnd + _overlay.Length;
-        if (fileSize > int.MaxValue)
-            throw new InvalidOperationException("PE image exceeds the maximum in-memory file size.");
-        var out_ = new byte[fileSize];
+        if (Sections.Count != NumberOfSections)
+            throw new InvalidOperationException(
+                $"Section count ({Sections.Count}) does not match COFF NumberOfSections ({NumberOfSections}).");
+        var header = new byte[checked((int)SizeOfHeaders)];
+        WriteHeadersInto(header);
+        return header;
+    }
 
-        _dosHeaderAndStub.CopyTo(out_, 0);
-        if (ScrubDosStub && _dosHeaderAndStub.Length > 0x40)
+    private void WriteHeadersInto(byte[] target)
+    {
+        _dosHeaderAndStub.CopyTo(target, 0);
+        if (ScrubDosStub && _dosHeaderAndStub.Length >= 0x40)
         {
             // Keep "MZ" (0-1) and e_lfanew (0x3C-0x3F); wipe the rest of the stub.
-            out_.AsSpan(2, 0x3A).Clear();
-            out_.AsSpan(0x40, _dosHeaderAndStub.Length - 0x40).Clear();
+            target.AsSpan(2, 0x3A).Clear();
+            if (_dosHeaderAndStub.Length > 0x40)
+                target.AsSpan(0x40, _dosHeaderAndStub.Length - 0x40).Clear();
         }
         int pos = _dosHeaderAndStub.Length;
 
-        BinaryPrimitives.WriteUInt32LittleEndian(out_.AsSpan(pos), PeSignature);
+        BinaryPrimitives.WriteUInt32LittleEndian(target.AsSpan(pos), PeSignature);
         pos += 4;
 
         Span<byte> fh = stackalloc byte[20];
@@ -562,10 +617,10 @@ public sealed class PeImage
         BinaryPrimitives.WriteUInt32LittleEndian(fh[12..], 0); // NumberOfSymbols
         BinaryPrimitives.WriteUInt16LittleEndian(fh[16..], SizeOfOptionalHeader);
         BinaryPrimitives.WriteUInt16LittleEndian(fh[18..], Characteristics);
-        fh.CopyTo(out_.AsSpan(pos));
+        fh.CopyTo(target.AsSpan(pos));
         pos += 20;
 
-        _optionalHeader.CopyTo(out_, pos);
+        _optionalHeader.CopyTo(target, pos);
         pos += _optionalHeader.Length;
 
         Span<byte> sh = stackalloc byte[40];
@@ -579,9 +634,45 @@ public sealed class PeImage
             BinaryPrimitives.WriteUInt32LittleEndian(sh[16..], s.SizeOfRawData);
             BinaryPrimitives.WriteUInt32LittleEndian(sh[20..], s.PointerToRawData);
             BinaryPrimitives.WriteUInt32LittleEndian(sh[36..], (uint)s.Characteristics);
-            sh.CopyTo(out_.AsSpan(pos));
+            sh.CopyTo(target.AsSpan(pos));
             pos += 40;
         }
+
+        // Preserve any non-overlapping header slack bytes (such as header-resident
+        // BoundImport descriptors) that sat between the original section table and SizeOfHeaders.
+        if (_headerSlack.Length > 0)
+        {
+            int copyStart = Math.Max(pos, _headerSlackOffset);
+            int slackSkip = copyStart - _headerSlackOffset;
+            int copyLen = Math.Min(_headerSlack.Length - slackSkip, (int)SizeOfHeaders - copyStart);
+            if (copyLen > 0)
+                _headerSlack.AsSpan(slackSkip, copyLen).CopyTo(target.AsSpan(copyStart));
+        }
+    }
+
+    // ---- Serialization ---------------------------------------------------------
+
+    /// <summary>Rebuilds the file: DOS header+stub, PE signature, file header,
+    /// optional header, section table, then each section's raw data at its
+    /// recorded file offset.</summary>
+    public byte[] ToBytes()
+    {
+        if (Sections.Count != NumberOfSections)
+            throw new InvalidOperationException(
+                $"Section count ({Sections.Count}) does not match COFF NumberOfSections ({NumberOfSections}).");
+        int requiredHeaders = checked(DosAndNtHeaderSize + SizeOfOptionalHeader + Sections.Count * 40);
+        if (SizeOfHeaders < (uint)requiredHeaders)
+            throw new InvalidOperationException("SizeOfHeaders is smaller than the serialized PE headers.");
+
+        long sectionEnd = Math.Max(
+            SizeOfHeaders,
+            Sections.Count == 0 ? 0 : Sections.Max(s => s.SizeOfRawData == 0 ? 0L : (long)s.PointerToRawData + s.SizeOfRawData));
+        long fileSize = sectionEnd + _overlay.Length;
+        if (fileSize > int.MaxValue)
+            throw new InvalidOperationException("PE image exceeds the maximum in-memory file size.");
+        var out_ = new byte[fileSize];
+
+        WriteHeadersInto(out_);
 
         foreach (var s in Sections)
         {

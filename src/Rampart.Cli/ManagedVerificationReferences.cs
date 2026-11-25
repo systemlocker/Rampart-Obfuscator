@@ -10,20 +10,19 @@ internal static class ManagedVerificationReferences
 {
     public static void Configure(string input, ProtectionSettings settings, List<string> explicitReferences, string? systemModule, bool resolveAutomatic)
     {
-        settings.Targets ??= new();
-        settings.Targets.Managed ??= new();
-        var options = settings.Targets.Managed.Verification;
-        if (options is null && explicitReferences.Count == 0)
+        var existingOptions = settings.Targets?.Managed?.Verification;
+        if (existingOptions is null && explicitReferences.Count == 0)
         {
             if (systemModule is not null)
                 throw new ArgumentException("MANAGED_VERIFICATION_REFERENCES: --verification-system-module requires an explicit reference set.");
             if (!resolveAutomatic) return; // Discovery runs under the protection worker's budgets.
-            options = Discover(input);
         }
-        options ??= new();
+        var options = existingOptions ?? (explicitReferences.Count == 0 ? Discover(input) : new ManagedVerificationOptions());
         options.ReferencePaths.AddRange(explicitReferences.Select(Path.GetFullPath));
         options.ReferencePaths = options.ReferencePaths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         options.SystemModuleName = systemModule ?? options.SystemModuleName;
+        settings.Targets ??= new();
+        settings.Targets.Managed ??= new();
         settings.Targets.Managed.Verification = options;
     }
 
@@ -77,61 +76,93 @@ internal static class ManagedVerificationReferences
             }
         }
         string directory = Path.GetDirectoryName(input)!;
-        string runtimeConfig = Path.ChangeExtension(input, ".runtimeconfig.json");
+        string runtimeConfig = CompanionPath(input, ".runtimeconfig.json");
         var frameworks = new List<(string Name, Version Version)>();
         if (File.Exists(runtimeConfig))
         {
             if (new FileInfo(runtimeConfig).Length > 1024 * 1024)
                 throw new ManagedProtectionException("MANAGED_VERIFICATION_LIMIT", "The runtime configuration exceeds the supported size.");
-            using var config = JsonDocument.Parse(File.ReadAllText(runtimeConfig));
-            var runtime = config.RootElement.GetProperty("runtimeOptions");
-            void AddFramework(JsonElement item)
+            try
             {
-                string name = item.GetProperty("name").GetString()!;
-                if (name is not ("Microsoft.NETCore.App" or "Microsoft.WindowsDesktop.App" or "Microsoft.AspNetCore.App"))
-                    throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "Supply explicit references for this runtime framework.");
-                frameworks.Add((name, Version.Parse(item.GetProperty("version").GetString()!)));
+                using var config = JsonDocument.Parse(File.ReadAllText(runtimeConfig));
+                if (config.RootElement.ValueKind == JsonValueKind.Object
+                    && config.RootElement.TryGetProperty("runtimeOptions", out var runtime)
+                    && runtime.ValueKind == JsonValueKind.Object)
+                {
+                    void AddFramework(JsonElement item)
+                    {
+                        if (item.ValueKind != JsonValueKind.Object
+                            || !item.TryGetProperty("name", out var nameElement) || nameElement.GetString() is not { } name
+                            || !item.TryGetProperty("version", out var versionElement) || !TryParseSemVer(versionElement.GetString(), out var version))
+                            throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "The runtime configuration contains an invalid framework entry.");
+                        if (name is not ("Microsoft.NETCore.App" or "Microsoft.WindowsDesktop.App" or "Microsoft.AspNetCore.App"))
+                            throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "Supply explicit references for this runtime framework.");
+                        frameworks.Add((name, version!));
+                    }
+                    if (runtime.TryGetProperty("framework", out var single)) AddFramework(single);
+                    if (runtime.TryGetProperty("frameworks", out var multiple) && multiple.ValueKind == JsonValueKind.Array)
+                        foreach (var item in multiple.EnumerateArray()) AddFramework(item);
+                }
             }
-            if (runtime.TryGetProperty("framework", out var single)) AddFramework(single);
-            if (runtime.TryGetProperty("frameworks", out var multiple)) foreach (var item in multiple.EnumerateArray()) AddFramework(item);
+            catch (JsonException error)
+            {
+                throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "The runtime configuration JSON is malformed.", error);
+            }
         }
-        bool legacy = framework?.StartsWith(".NETFramework,Version=v4", StringComparison.Ordinal) == true
+        bool legacy = framework?.StartsWith(".NETFramework,Version=v4", StringComparison.OrdinalIgnoreCase) == true
             || framework is null && frameworkReference && frameworks.Count == 0;
         if (legacy)
         {
             string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            string references = Path.Combine(windows, "Microsoft.NET", "Framework64", "v4.0.30319");
-            if (!Directory.Exists(references)) throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "Supply .NET Framework verification references explicitly on this host.");
-            AddDirectory(references);
-            if (Directory.Exists(Path.Combine(references, "WPF"))) AddDirectory(Path.Combine(references, "WPF"));
+            string references = string.IsNullOrWhiteSpace(windows) ? "" : Path.Combine(windows, "Microsoft.NET", "Framework64", "v4.0.30319");
+            if (string.IsNullOrWhiteSpace(references) || !Directory.Exists(references))
+                throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "Supply .NET Framework verification references explicitly on this host.");
+            AddDirectory(references, frameworkSource: true);
+            if (Directory.Exists(Path.Combine(references, "WPF"))) AddDirectory(Path.Combine(references, "WPF"), frameworkSource: true);
         }
         else if (!File.Exists(Path.Combine(directory, "System.Private.CoreLib.dll")))
         {
             if (frameworks.Count == 0)
             {
                 const string prefix = ".NETCoreApp,Version=v";
-                if (framework is null || !framework.StartsWith(prefix, StringComparison.Ordinal)
-                    || !Version.TryParse(framework[prefix.Length..], out var targetVersion))
+                if (framework is null || !framework.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    || !TryParseSemVer(framework[prefix.Length..].Split(',')[0], out var targetVersion))
                     throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "The target runtime is unknown. Supply explicit verification references.");
-                frameworks.Add(("Microsoft.NETCore.App", targetVersion));
+                frameworks.Add(("Microsoft.NETCore.App", targetVersion!));
             }
             if (!frameworks.Any(item => item.Name == "Microsoft.NETCore.App"))
                 frameworks.Insert(0, ("Microsoft.NETCore.App", frameworks[0].Version));
             var sharedRoots = new List<string>();
-            string processShared = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!, "..", ".."));
-            if (Path.GetFileName(processShared).Equals("shared", StringComparison.OrdinalIgnoreCase)) sharedRoots.Add(processShared);
+            string coreLocation = typeof(object).Assembly.Location;
+            if (!string.IsNullOrEmpty(coreLocation) && Path.GetDirectoryName(coreLocation) is { } coreDir)
+            {
+                string processShared = Path.GetFullPath(Path.Combine(coreDir, "..", ".."));
+                if (Path.GetFileName(processShared).Equals("shared", StringComparison.OrdinalIgnoreCase)) sharedRoots.Add(processShared);
+            }
             // A self-contained protector carries CoreLib beside the executable;
             // walking its parents does not locate the user's shared frameworks.
             // Use explicit/standard dotnet roots as well, but retain the declared
             // target family's exact major/minor restriction below.
-            foreach (string? root in new[] { Environment.GetEnvironmentVariable("DOTNET_ROOT_X64"), Environment.GetEnvironmentVariable("DOTNET_ROOT"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet") })
+            var probeRoots = new List<string?>
+            {
+                Environment.GetEnvironmentVariable("DOTNET_ROOT_X64"),
+                Environment.GetEnvironmentVariable("DOTNET_ROOT"),
+            };
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (!string.IsNullOrWhiteSpace(programFiles))
+                probeRoots.Add(Path.Combine(programFiles, "dotnet"));
+            if (!OperatingSystem.IsWindows())
+            {
+                probeRoots.Add("/usr/share/dotnet");
+                probeRoots.Add("/usr/local/share/dotnet");
+            }
+            foreach (string? root in probeRoots)
                 if (!string.IsNullOrWhiteSpace(root)) sharedRoots.Add(Path.Combine(Path.GetFullPath(root), "shared"));
             foreach (var target in frameworks.OrderBy(item => item.Name == "Microsoft.NETCore.App" ? 0 : 1))
             {
                 string? selected = sharedRoots.Distinct(StringComparer.OrdinalIgnoreCase).Select(root => Path.Combine(root, target.Name))
                     .Where(Directory.Exists).SelectMany(Directory.EnumerateDirectories)
-                    .Select(path => (Path: path, Version: Version.TryParse(Path.GetFileName(path), out var version) ? version : null))
+                    .Select(path => (Path: path, Version: TryParseSemVer(Path.GetFileName(path), out var version) ? version : null))
                     .Where(item => item.Version is not null && item.Version.Major == target.Version.Major && item.Version.Minor == target.Version.Minor
                         && item.Version >= target.Version)
                     .OrderByDescending(item => item.Version).ThenBy(item => item.Path, StringComparer.Ordinal).Select(item => item.Path).FirstOrDefault();
@@ -145,24 +176,34 @@ internal static class ManagedVerificationReferences
         // an arbitrary local System.* package does not become a framework file.
         if (File.Exists(Path.Combine(directory, "System.Private.CoreLib.dll")))
         {
-            string depsPath = Path.ChangeExtension(input, ".deps.json");
+            string depsPath = CompanionPath(input, ".deps.json");
             if (File.Exists(depsPath))
             {
                 if (new FileInfo(depsPath).Length > 16L * 1024 * 1024)
                     throw new ManagedProtectionException("MANAGED_VERIFICATION_LIMIT", "The dependency manifest exceeds the supported size.");
-                using var deps = JsonDocument.Parse(File.ReadAllText(depsPath));
-                if (deps.RootElement.TryGetProperty("targets", out var targets))
-                    foreach (var target in targets.EnumerateObject())
-                        foreach (var library in target.Value.EnumerateObject())
-                        {
-                            string name = library.Name.StartsWith("runtimepack.", StringComparison.Ordinal) ? library.Name[12..] : library.Name;
-                            if (!name.StartsWith("Microsoft.NETCore.App.Runtime.", StringComparison.Ordinal)
-                                && !name.StartsWith("Microsoft.WindowsDesktop.App.Runtime.", StringComparison.Ordinal)
-                                && !name.StartsWith("Microsoft.AspNetCore.App.Runtime.", StringComparison.Ordinal)) continue;
-                            if (library.Value.TryGetProperty("runtime", out var runtime))
-                                foreach (var asset in runtime.EnumerateObject())
-                                    frameworkPaths.Add(Path.Combine(directory, Path.GetFileName(asset.Name)));
-                        }
+                try
+                {
+                    using var deps = JsonDocument.Parse(File.ReadAllText(depsPath));
+                    if (deps.RootElement.ValueKind == JsonValueKind.Object
+                        && deps.RootElement.TryGetProperty("targets", out var targets) && targets.ValueKind == JsonValueKind.Object)
+                        foreach (var target in targets.EnumerateObject())
+                            if (target.Value.ValueKind == JsonValueKind.Object)
+                                foreach (var library in target.Value.EnumerateObject())
+                                {
+                                    string name = library.Name.StartsWith("runtimepack.", StringComparison.Ordinal) ? library.Name[12..] : library.Name;
+                                    if (!name.StartsWith("Microsoft.NETCore.App.Runtime.", StringComparison.Ordinal)
+                                        && !name.StartsWith("Microsoft.WindowsDesktop.App.Runtime.", StringComparison.Ordinal)
+                                        && !name.StartsWith("Microsoft.AspNetCore.App.Runtime.", StringComparison.Ordinal)) continue;
+                                    if (library.Value.ValueKind == JsonValueKind.Object
+                                        && library.Value.TryGetProperty("runtime", out var runtime) && runtime.ValueKind == JsonValueKind.Object)
+                                        foreach (var asset in runtime.EnumerateObject())
+                                            frameworkPaths.Add(Path.Combine(directory, Path.GetFileName(asset.Name)));
+                                }
+                }
+                catch (JsonException error)
+                {
+                    throw new ManagedProtectionException("MANAGED_VERIFICATION_RUNTIME", "The dependency manifest JSON is malformed.", error);
+                }
             }
         }
         // Local deployment assets win over framework facades (for example WPF's
@@ -174,5 +215,21 @@ internal static class ManagedVerificationReferences
             FrameworkReferencePaths = paths.Values.Where(frameworkPaths.Contains).Order(StringComparer.Ordinal).ToList(),
             SystemModuleName = legacy ? "mscorlib" : "System.Private.CoreLib"
         };
+    }
+
+    private static string CompanionPath(string input, string suffix)
+    {
+        string ext = Path.GetExtension(input);
+        return ext.Equals(".exe", StringComparison.OrdinalIgnoreCase) || ext.Equals(".dll", StringComparison.OrdinalIgnoreCase)
+            ? Path.ChangeExtension(input, suffix)
+            : input + suffix;
+    }
+
+    private static bool TryParseSemVer(string? raw, out Version? version)
+    {
+        version = null;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        string core = raw.Split(['-', '+'], 2)[0].Trim();
+        return Version.TryParse(core, out version);
     }
 }

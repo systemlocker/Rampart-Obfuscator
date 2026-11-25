@@ -19,11 +19,19 @@ public sealed record KnobDef(
     string[] LevelTexts,
     string[] Tags)
 {
-    public int PointsAt(ProtectionLevel level) =>
-        level == ProtectionLevel.Off ? 0 : Points[(int)level - 1];
+    public int PointsAt(ProtectionLevel level)
+    {
+        if (!Enum.IsDefined(level))
+            throw new ArgumentOutOfRangeException(nameof(level), level, $"Invalid protection level {(int)level}.");
+        return level == ProtectionLevel.Off ? 0 : Points[(int)level - 1];
+    }
 
-    public string LevelText(ProtectionLevel level) =>
-        level == ProtectionLevel.Off ? "Off — no bytes change." : LevelTexts[(int)level - 1];
+    public string LevelText(ProtectionLevel level)
+    {
+        if (!Enum.IsDefined(level))
+            throw new ArgumentOutOfRangeException(nameof(level), level, $"Invalid protection level {(int)level}.");
+        return level == ProtectionLevel.Off ? "Off — no bytes change." : LevelTexts[(int)level - 1];
+    }
 
     public bool HasTag(string tag) => Tags.Contains(tag, StringComparer.Ordinal);
 }

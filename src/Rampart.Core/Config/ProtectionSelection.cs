@@ -77,6 +77,8 @@ public static class ProtectionSelection
         string group,
         ProtectionLevel level)
     {
+        if (!Enum.IsDefined(level))
+            throw new ArgumentOutOfRangeException(nameof(level), level, $"Invalid protection level {(int)level}.");
         if (!KnobGroups.All.Contains(group, StringComparer.Ordinal))
         {
             throw new ArgumentException(

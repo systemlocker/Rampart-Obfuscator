@@ -172,9 +172,13 @@ public static class TargetClassifier
         }
         if ((assembly.Flags & AssemblyFlags.WindowsRuntime) != 0)
             return Result(ProtectionTargetKind.ManagedIl, TargetDisposition.Unsupported, "target.windows-runtime", arch, ".NET");
+        bool hasAuthenticode = headers.PEHeader!.CertificateTableDirectory.Size != 0;
         bool strongName = !assembly.PublicKey.IsNil || cor.StrongNameSignatureDirectory.Size != 0;
         if (strongName)
-            signing = cor.Flags.HasFlag(CorFlags.StrongNameSigned) ? "strong-name-signed" : "strong-name-delay-signed";
+        {
+            string strongNameState = cor.Flags.HasFlag(CorFlags.StrongNameSigned) ? "strong-name-signed" : "strong-name-delay-signed";
+            signing = hasAuthenticode ? strongNameState + "+authenticode-present" : strongNameState;
+        }
         bool anyCpu = headers.CoffHeader.Machine == Machine.I386 && !cor.Flags.HasFlag(CorFlags.Requires32Bit);
         if (anyCpu) arch = "AnyCPU";
         bool eligible = (anyCpu && headers.PEHeader!.Magic == PEMagic.PE32
@@ -182,7 +186,7 @@ public static class TargetClassifier
             && !cor.Flags.HasFlag(CorFlags.Requires32Bit) && !cor.Flags.HasFlag(CorFlags.Prefers32Bit);
         var features = new List<string> { "pure-il" };
         if (strongName) features.Add("strong-name-identity");
-        if (headers.PEHeader!.CertificateTableDirectory.Size != 0) features.Add("authenticode-present");
+        if (hasAuthenticode) features.Add("authenticode-present");
         return Result(ProtectionTargetKind.ManagedIl,
             eligible ? TargetDisposition.Supported : TargetDisposition.Unsupported,
             eligible ? "target.managed-il" : "target.managed-platform", arch, ".NET",
@@ -232,7 +236,12 @@ public static class TargetClassifier
     private static bool? ReadSelfContained(string? inputPath)
     {
         if (string.IsNullOrWhiteSpace(inputPath)) return null;
-        string path = Path.ChangeExtension(inputPath, ".runtimeconfig.json");
+        string ext = Path.GetExtension(inputPath);
+        // Extensionless dotted binaries (e.g. "My.App") pair with "My.App.runtimeconfig.json"
+        // rather than stripping ".App".
+        string path = ext.Equals(".exe", StringComparison.OrdinalIgnoreCase) || ext.Equals(".dll", StringComparison.OrdinalIgnoreCase)
+            ? Path.ChangeExtension(inputPath, ".runtimeconfig.json")
+            : inputPath + ".runtimeconfig.json";
         try
         {
             if (!File.Exists(path)) return null;

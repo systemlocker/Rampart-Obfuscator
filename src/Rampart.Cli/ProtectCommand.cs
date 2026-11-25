@@ -1,8 +1,6 @@
 using System.Text.Json;
 using Rampart.Config;
 using Rampart.Engine;
-using Rampart.Pe;
-using Rampart.Symbols;
 using Rampart.Targets;
 
 namespace Rampart.Cli;
@@ -11,7 +9,7 @@ internal static class ProtectCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Contains("--help", StringComparer.Ordinal))
+        if (args.Contains("--help", StringComparer.Ordinal) || args.Contains("-h", StringComparer.Ordinal))
         {
             PrintUsage();
             return 0;
@@ -67,31 +65,50 @@ internal static class ProtectCommand
         if (input is null)
             throw new ArgumentException("protect requires an input PE file.");
 
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         string inputPath = Path.GetFullPath(input);
         if (!File.Exists(inputPath))
             throw new FileNotFoundException("Input PE file was not found.", inputPath);
         string outputPath = Path.GetFullPath(output ?? DefaultOutputPath(inputPath));
-        if (string.Equals(inputPath, outputPath, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(inputPath, outputPath, pathComparison))
             throw new ArgumentException("Output must not overwrite the input file.");
         string? symbolMapPath = emitSymbolMap
             ? Path.GetFullPath(symbolMap ?? DefaultSymbolMapPath(outputPath))
             : null;
         if (symbolMapPath is not null
-            && (string.Equals(inputPath, symbolMapPath, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(outputPath, symbolMapPath, StringComparison.OrdinalIgnoreCase)))
+            && (string.Equals(inputPath, symbolMapPath, pathComparison)
+                || string.Equals(outputPath, symbolMapPath, pathComparison)))
         {
             throw new ArgumentException("The private symbol-map path must differ from input and output paths.");
         }
 
         var catalog = KnobCatalog.Load();
         byte[] inputBytes = ProtectionPipeline.ReadInput(inputPath);
-        var settings = settingsArgs.Build(catalog, TargetClassifier.Classify(inputBytes, inputPath).Target.Kind);
-        if (TargetClassifier.Classify(inputBytes, inputPath).Target.Kind == ProtectionTargetKind.ManagedIl)
-            ManagedVerificationReferences.Configure(inputPath, settings, verificationReferences, verificationSystemModule, resolveAutomatic: dryRun);
+        var classification = TargetClassifier.Classify(inputBytes, inputPath);
+        if (!classification.CanProtect)
+            _ = ProtectionPipeline.BackendFor(classification, new ProtectionSettings());
+        var settings = settingsArgs.Build(catalog, classification.Target.Kind);
+        if (classification.Target.Kind == ProtectionTargetKind.ManagedIl)
+        {
+            // Keep auto-discovered machine-specific verification paths out of dry-run
+            // configuration previews while still verifying that discovery succeeds.
+            if (dryRun && verificationReferences.Count == 0 && settings.Targets?.Managed?.Verification is null)
+            {
+                if (verificationSystemModule is not null)
+                    throw new ArgumentException("MANAGED_VERIFICATION_REFERENCES: --verification-system-module requires an explicit reference set.");
+                _ = ManagedVerificationReferences.Discover(inputPath, inputBytes);
+            }
+            else
+            {
+                ManagedVerificationReferences.Configure(inputPath, settings, verificationReferences, verificationSystemModule, resolveAutomatic: false);
+            }
+        }
         else if (verificationReferences.Count != 0 || verificationSystemModule is not null)
+        {
             throw new ArgumentException("RP_TARGET_OPTIONS_MISMATCH: Verification references apply only to managed IL.");
+        }
         var pipeline = new ProtectionPipeline();
-        var plan = pipeline.Plan(inputBytes, settings);
+        var plan = pipeline.Plan(inputBytes, settings, inputPath);
         var graph = ArtifactGraph.Inspect(inputPath, plan.Classification,
             ArtifactSigningInstructions.ForTarget(plan.Classification.Target, settings.Targets?.Managed?.StrongNameKeyEnvironmentVariable));
 
@@ -109,15 +126,25 @@ internal static class ProtectCommand
         if (symbolMapPath is not null)
             EnsureCanWrite(symbolMapPath, force);
         string inputPdb = Path.ChangeExtension(inputPath, ".pdb");
-        byte[]? pdb = plan.Classification.Target.Kind != ProtectionTargetKind.NativePe && File.Exists(inputPdb)
+        string outputPdb = Path.ChangeExtension(outputPath, ".pdb");
+        bool wantManagedPdb = plan.Classification.Target.Kind == ProtectionTargetKind.ManagedIl
+            && (settings.Targets?.Managed?.PreserveDebugSymbols ?? true);
+        bool copyNativeAotPdb = plan.Classification.Target.Kind == ProtectionTargetKind.NativeAot && File.Exists(inputPdb);
+        if ((wantManagedPdb && File.Exists(inputPdb) || copyNativeAotPdb)
+            && string.Equals(inputPdb, outputPdb, pathComparison))
+            throw new IOException("RP_OUTPUT_COLLISION: Output symbol path must not overwrite the input symbol file.");
+        if ((wantManagedPdb && File.Exists(inputPdb) || copyNativeAotPdb)
+            || (plan.Classification.Target.Kind == ProtectionTargetKind.ManagedIl && File.Exists(outputPdb)))
+            EnsureCanWrite(outputPdb, force);
+
+        byte[]? pdb = (wantManagedPdb || copyNativeAotPdb) && File.Exists(inputPdb)
             ? ProtectionPipeline.ReadInput(inputPdb) : null;
         var result = plan.Classification.Target.Kind == ProtectionTargetKind.ManagedIl
             ? ManagedWorker.Protect(inputBytes, pdb, settings, plan, inputPath)
-            : pipeline.Protect(inputBytes, settings, pdb);
+            : pipeline.Protect(inputBytes, settings, pdb, inputPath);
         var artifacts = new List<OutputArtifact> { new(outputPath, result.Output) };
         if (symbolMapPath is not null)
             artifacts.Add(new(symbolMapPath, JsonSerializer.SerializeToUtf8Bytes(result.PrivateMap, ProtectionSettingsJson.Options)));
-        string outputPdb = Path.ChangeExtension(outputPath, ".pdb");
         if (result.Symbols is not null)
             artifacts.Add(new(outputPdb, result.Symbols));
         // A previous output PDB no longer describes an image emitted without
@@ -185,29 +212,6 @@ internal static class ProtectCommand
         return Path.Combine(directory, $"{name}.protected{extension}");
     }
 
-    private static void WriteOutput(string outputPath, byte[] bytes, bool force)
-    {
-        string directory = Path.GetDirectoryName(outputPath)!;
-
-        string temporary = Path.Combine(directory, $".{Path.GetFileName(outputPath)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllBytes(temporary, bytes);
-            File.Move(temporary, outputPath, overwrite: force);
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-                File.Delete(temporary);
-        }
-    }
-
-    private static void WriteJsonOutput(string outputPath, object value, bool force)
-    {
-        byte[] json = JsonSerializer.SerializeToUtf8Bytes(value, ProtectionSettingsJson.Options);
-        WriteOutput(outputPath, json, force);
-    }
-
     private static void WritePreview(
         string inputPath,
         string outputPath,
@@ -219,6 +223,9 @@ internal static class ProtectCommand
         ProtectionPlan plan,
         ArtifactGraph graph)
     {
+        int budget = plan.Classification.Target.Kind == ProtectionTargetKind.NativePe
+            ? KnobCatalog.BudgetFor(settings, catalog)
+            : 0;
         var preview = new
         {
             Input = inputPath,
@@ -227,7 +234,7 @@ internal static class ProtectCommand
             Settings = SettingsArguments.SettingsPayload(settings, plan.Classification.Target.Kind),
             Plan = plan,
             Artifacts = graph,
-            BudgetPoints = KnobCatalog.BudgetFor(settings, catalog),
+            BudgetPoints = budget,
             Concerns = concerns,
         };
 

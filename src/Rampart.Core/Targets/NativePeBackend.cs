@@ -21,9 +21,13 @@ public sealed class NativePeBackend : IProtectionBackend
             throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: The target settings do not apply to a native PE executable.");
         var catalog = KnobCatalog.Load();
         ProtectionCapabilities.Validate(settings, catalog);
-        PeCompatibility.Validate(PeImage.Load(input));
+        var pe = PeImage.Load(input);
+        PeCompatibility.Validate(pe);
         var effective = ProtectionSettingsJson.Deserialize(ProtectionSettingsJson.Serialize(settings));
         ThreatDials.Apply(effective, catalog);
+        var records = SymbolLoader.Load(effective.SymbolSources, pe, effective.PdbTool);
+        var functions = FunctionDescriptor.Attach(pe, ExceptionTable.Parse(pe), records);
+        ProtectionCapabilities.ValidateEffectiveFunctionPolicies(effective, catalog, functions);
         return new(classification, Name, catalog.All.Select(k => new PlannedProtection(
             k.Id, effective.LevelOf(k).ToString(), effective.LevelOf(k).ToString(), "RP_NATIVE_POLICY")).ToArray(), []);
     }
@@ -35,6 +39,17 @@ public sealed class NativePeBackend : IProtectionBackend
         var records = SymbolLoader.Load(settings.SymbolSources, pe, settings.PdbTool);
         var result = new Protector().Protect(input, settings, symbols: records);
         var evidence = new List<ProtectionEvidence>();
+        var imageSubject = new ProtectionSubject("image");
+        foreach (var planned in plan.Protections.Where(p => p.Effective != nameof(ProtectionLevel.Off)
+            && !ProtectionCapabilities.FunctionScopedKnobs.Contains(p.Id)))
+        {
+            bool applied = result.Applied.TryGetValue(planned.Id, out var appliedLevel) && appliedLevel != ProtectionLevel.Off;
+            evidence.Add(new(planned.Id, imageSubject, imageSubject,
+                applied ? appliedLevel.ToString() : planned.Effective,
+                applied ? EvidenceDisposition.Applied : EvidenceDisposition.Skipped,
+                applied ? "RP_APPLIED" : "RP_NATIVE_NO_ELIGIBLE_SITES",
+                input.Length, result.Output.Length));
+        }
         foreach (var function in result.SymbolMap.Functions)
         {
             var original = new ProtectionSubject(function.Name, Module: function.Module, Rva: function.OriginalRva);
@@ -48,7 +63,7 @@ public sealed class NativePeBackend : IProtectionBackend
                     checked((int)function.Size), checked((int)(function.ProtectedSize ?? function.Size))));
             }
         }
-        var output = new BackendProtectionResult
+        return new BackendProtectionResult
         {
             Output = result.Output,
             Plan = plan,
@@ -60,8 +75,6 @@ public sealed class NativePeBackend : IProtectionBackend
             InputSize = input.Length,
             Details = result,
         };
-        Validate(input, output);
-        return output;
     }
 
     public void Validate(byte[] original, BackendProtectionResult result)

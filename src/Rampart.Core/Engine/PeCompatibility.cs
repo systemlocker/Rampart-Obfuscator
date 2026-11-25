@@ -55,16 +55,23 @@ public static class PeCompatibility
             EnsureReadable(pe, loadConfig, 4, "load-config");
             loadConfigSize = BinaryPrimitives.ReadUInt32LittleEndian(
                 pe.ReadRva(loadConfig.RelativeVirtualAddress, 4));
-            if (loadConfigSize < 4 || loadConfigSize > loadConfig.Size)
+            PeImage.Section? loadConfigSection = pe.SectionFromRva(loadConfig.RelativeVirtualAddress);
+            uint sectionAvail = loadConfigSection is null
+                ? 0u
+                : checked(loadConfigSection.SizeOfRawData - (loadConfig.RelativeVirtualAddress - loadConfigSection.VirtualAddress));
+            // Modern Windows SDK / MSVC linkers frequently write a larger internal
+            // IMAGE_LOAD_CONFIG_DIRECTORY64::Size than DataDirectory[10].Size (0x40).
+            // Accept it as long as the full struct fits within the section's raw backing.
+            if (loadConfigSize < 4 || loadConfigSize > sectionAvail)
             {
                 throw new BadImageFormatException(
-                    $"Load-config size {loadConfigSize} is outside directory size {loadConfig.Size}.");
+                    $"Load-config size {loadConfigSize} is outside its section backing ({sectionAvail} bytes).");
             }
             // IMAGE_LOAD_CONFIG_DIRECTORY64::GuardFlags is at offset 0x90.
             if (loadConfigSize >= 0x94)
             {
                 guardFlags = (ImageGuardFlags)BinaryPrimitives.ReadUInt32LittleEndian(
-                    pe.ReadRva(loadConfig.RelativeVirtualAddress + 0x90, 4));
+                    pe.ReadRva(checked(loadConfig.RelativeVirtualAddress + 0x90), 4));
             }
         }
 
@@ -94,9 +101,17 @@ public static class PeCompatibility
         int maximum = checked((int)(directory.Size / 32));
         for (int i = 0; i < maximum; i++)
         {
-            byte[] descriptor = pe.ReadRva(directory.RelativeVirtualAddress + (uint)(i * 32), 32);
+            byte[] descriptor = pe.ReadRva(checked(directory.RelativeVirtualAddress + (uint)(i * 32)), 32);
             if (descriptor.All(value => value == 0))
                 return i;
+        }
+        // Some linkers exclude the trailing null descriptor from DataDir.DelayImport.Size;
+        // accept it when a null descriptor immediately follows in the section's raw bytes.
+        uint trailingRva = checked(directory.RelativeVirtualAddress + (uint)(maximum * 32));
+        if (pe.TryRvaToOffset(trailingRva, out _) && pe.TryRvaToOffset(checked(trailingRva + 31), out _)
+            && pe.ReadRva(trailingRva, 32).All(value => value == 0))
+        {
+            return maximum;
         }
         throw new BadImageFormatException("Delay-import directory has no terminating descriptor.");
     }
@@ -106,21 +121,25 @@ public static class PeCompatibility
         DataDirectory directory = pe.Directory(DataDir.BoundImport);
         if (directory.IsEmpty)
             return 0;
-        EnsureReadable(pe, directory, 8, "bound-import");
+        if (directory.RelativeVirtualAddress == 0 || directory.Size < 8)
+            throw new BadImageFormatException("bound-import directory is present but smaller than 8 bytes.");
+
+        // BoundImport directories may live either inside the PE headers (standard
+        // MSVC/BIND layout) or inside a mapped section.
+        byte[] table = pe.ReadHeaderOrRva(directory.RelativeVirtualAddress, checked((int)directory.Size));
 
         uint offset = 0;
         int count = 0;
-        while (offset + 8 <= directory.Size)
+        while ((ulong)offset + 8 <= (ulong)table.Length)
         {
-            byte[] descriptor = pe.ReadRva(directory.RelativeVirtualAddress + offset, 8);
+            ReadOnlySpan<byte> descriptor = table.AsSpan((int)offset, 8);
             uint timestamp = BinaryPrimitives.ReadUInt32LittleEndian(descriptor);
-            ushort nameOffset = BinaryPrimitives.ReadUInt16LittleEndian(descriptor.AsSpan(4));
-            ushort forwarders = BinaryPrimitives.ReadUInt16LittleEndian(descriptor.AsSpan(6));
+            ushort nameOffset = BinaryPrimitives.ReadUInt16LittleEndian(descriptor[4..]);
+            ushort forwarders = BinaryPrimitives.ReadUInt16LittleEndian(descriptor[6..]);
             if (timestamp == 0 && nameOffset == 0 && forwarders == 0)
                 return count;
-            if (nameOffset >= directory.Size)
-                throw new BadImageFormatException("Bound-import module name points outside its directory.");
-            _ = pe.ReadCString(directory.RelativeVirtualAddress + nameOffset);
+            if (nameOffset >= table.Length || table.AsSpan(nameOffset).IndexOf((byte)0) < 0)
+                throw new BadImageFormatException("Bound-import module name is missing or unterminated within its directory.");
             offset = checked(offset + 8u + (uint)forwarders * 8u);
             count++;
         }

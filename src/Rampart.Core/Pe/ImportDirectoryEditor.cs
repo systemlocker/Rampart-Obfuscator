@@ -19,10 +19,12 @@ public static class ImportDirectoryEditor
         params string[] names)
     {
         ArgumentNullException.ThrowIfNull(ctx);
-        if (string.IsNullOrWhiteSpace(dll))
-            throw new ArgumentException("A DLL name is required.", nameof(dll));
-        if (names.Length == 0 || names.Any(string.IsNullOrWhiteSpace))
-            throw new ArgumentException("At least one non-empty import name is required.", nameof(names));
+        if (!ctx.Pe.IsPe32Plus)
+            throw new NotSupportedException("Runtime import editing requires a PE32+ image.");
+        if (!IsValidAsciiName(dll, allowSpaces: true))
+            throw new ArgumentException("A valid printable ASCII DLL name is required.", nameof(dll));
+        if (names.Length == 0 || names.Any(name => !IsValidAsciiName(name, allowSpaces: false) || name.StartsWith('#')))
+            throw new ArgumentException("At least one valid printable ASCII named import is required.", nameof(names));
 
         var result = new Dictionary<string, uint>(StringComparer.Ordinal);
         string normalizedDll = ImportTable.NormalizeDll(dll);
@@ -76,13 +78,25 @@ public static class ImportDirectoryEditor
             descriptors[i].CopyTo(rebuilt, i * DescriptorSize);
         uint descriptorsRva = ctx.AllocData(rebuilt.Length, 8);
         ctx.WriteData(descriptorsRva, rebuilt);
-        ctx.Pe.SetDirectory(DataDir.Import, descriptorsRva, (uint)rebuilt.Length);
+        ctx.Pe.SetDirectory(DataDir.Import, descriptorsRva, checked((uint)rebuilt.Length));
 
         for (int i = 0; i < missing.Length; i++)
-            result[missing[i]] = iatRva + (uint)(i * 8);
+            result[missing[i]] = checked(iatRva + (uint)(i * 8));
         ctx.Log.Add(new("guard-imports",
             $"added {missing.Length} runtime import(s) from {dll} at RVA {iatRva:X8}"));
         return result;
+    }
+
+    private static bool IsValidAsciiName(string value, bool allowSpaces)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (char c in value)
+        {
+            if (c < (allowSpaces ? 0x20 : 0x21) || c > 0x7E)
+                return false;
+        }
+        return true;
     }
 
     private static List<byte[]> ReadDescriptors(PeImage pe)
@@ -91,17 +105,28 @@ public static class ImportDirectoryEditor
         DataDirectory directory = pe.Directory(DataDir.Import);
         if (directory.IsEmpty)
             return descriptors;
+        if (directory.RelativeVirtualAddress == 0 || directory.Size < DescriptorSize)
+            throw new BadImageFormatException("Import directory is present but smaller than one descriptor.");
 
-        uint rva = directory.RelativeVirtualAddress;
-        for (int i = 0; i < MaximumDescriptors; i++, rva += DescriptorSize)
+        int maxBySize = checked((int)(directory.Size / DescriptorSize));
+        int limit = Math.Min(maxBySize, MaximumDescriptors);
+        for (int i = 0; i < limit; i++)
         {
+            uint rva = checked(directory.RelativeVirtualAddress + (uint)(i * DescriptorSize));
             byte[] descriptor = pe.ReadRva(rva, DescriptorSize);
-            if (descriptor.All(value => value == 0))
+            uint originalFirstThunk = BinaryPrimitives.ReadUInt32LittleEndian(descriptor);
+            uint nameRva = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(12));
+            uint firstThunk = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(16));
+            if (originalFirstThunk == 0 && nameRva == 0 && firstThunk == 0)
                 return descriptors;
             descriptors.Add(descriptor);
         }
-        throw new BadImageFormatException(
-            $"Import directory has more than {MaximumDescriptors} descriptors or no terminator.");
+        if (maxBySize > MaximumDescriptors)
+            throw new BadImageFormatException(
+                $"Import directory has more than {MaximumDescriptors} descriptors or no terminator.");
+        // Some linkers omit the trailing null descriptor from directory.Size;
+        // if a null descriptor immediately follows in raw backing, accept it cleanly.
+        return descriptors;
     }
 
     private static uint WriteAsciiZ(BuildContext ctx, string value)

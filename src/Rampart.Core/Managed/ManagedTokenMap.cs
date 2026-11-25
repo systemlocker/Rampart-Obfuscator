@@ -18,6 +18,7 @@ internal sealed class ManagedTokenMap
     }
     private readonly Dictionary<int, IMetadataTokenProvider> definitions = [];
     private readonly Dictionary<int, string> references = [];
+    private readonly Dictionary<int, string> callSites = [];
     private readonly byte[] input;
 
     internal ManagedTokenMap(byte[] input, ModuleDefinition module)
@@ -35,6 +36,13 @@ internal sealed class ManagedTokenMap
                 var token = table << 24 | row;
                 if (module.LookupToken(token) is { } provider) references[token] = ReferenceKey(provider);
             }
+        foreach (var method in module.GetTypes().SelectMany(type => type.Methods).Where(method => method.HasBody))
+            foreach (var instruction in method.Body.Instructions)
+                if (instruction.Operand is CallSite site)
+                {
+                    var token = site.MetadataToken.ToInt32();
+                    if ((token & 0xffffff) != 0) callSites.TryAdd(token, CallSiteKey(site));
+                }
     }
 
     internal IReadOnlyList<ManagedTokenMapping> Build(byte[] output, ModuleDefinition emitted, Func<string, string> normalize)
@@ -50,6 +58,25 @@ internal sealed class ManagedTokenMap
             }
         foreach (var reference in references)
             if (rewrittenReferences.TryGetValue(reference.Value, out var token)) mappings[reference.Key] = token;
+
+        if (callSites.Count > 0)
+        {
+            var rewrittenCallSites = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
+            foreach (var method in emitted.GetTypes().SelectMany(type => type.Methods).Where(method => method.HasBody))
+                foreach (var instruction in method.Body.Instructions)
+                    if (instruction.Operand is CallSite site)
+                    {
+                        var token = site.MetadataToken.ToInt32();
+                        if ((token & 0xffffff) == 0) continue;
+                        var key = normalize(CallSiteKey(site));
+                        if (!rewrittenCallSites.TryGetValue(key, out var queue)) rewrittenCallSites.Add(key, queue = new());
+                        if (!queue.Contains(token)) queue.Enqueue(token);
+                    }
+            foreach (var callSite in callSites)
+                if (!mappings.ContainsKey(callSite.Key)
+                    && rewrittenCallSites.TryGetValue(callSite.Value, out var queue) && queue.Count > 0)
+                    mappings[callSite.Key] = queue.Dequeue();
+        }
 
         // Local signature tokens belong to method bodies, rather than Cecil's token
         // lookup API. Follow the retained MethodDef identity to the emitted signature.
@@ -69,7 +96,9 @@ internal sealed class ManagedTokenMap
         // Remaining rows are relationships. Canonicalize their heap contents and
         // remap every referenced entity before comparing with the emitted table.
         // Several passes allow ExportedType and other relationships to depend on
-        // rows whose identity is established later in table order.
+        // rows whose identity is established later in table order. Track claimed
+        // output tokens across passes so two original rows never share one output token.
+        var claimed = new HashSet<int>(mappings.Values.Where(token => token != 0));
         for (var iteration = 0; iteration < 64; iteration++)
         {
             var additions = 0;
@@ -79,6 +108,7 @@ internal sealed class ManagedTokenMap
                 for (var row = 1; row <= rewritten.Reader.GetTableRowCount((TableIndex)table); row++)
                 {
                     var token = table << 24 | row;
+                    if (claimed.Contains(token)) continue;
                     var key = rewritten.Key(table, row, null);
                     if (key is null) continue;
                     if (!destinations.TryGetValue(key, out var queue)) destinations.Add(key, queue = new());
@@ -90,7 +120,10 @@ internal sealed class ManagedTokenMap
                     if (mappings.ContainsKey(token)) continue;
                     var key = original.Key(table, row, mappings);
                     if (key is null || !destinations.TryGetValue(key, out var queue) || queue.Count == 0) continue;
-                    mappings[token] = queue.Dequeue(); additions++;
+                    var destination = queue.Dequeue();
+                    mappings[token] = destination;
+                    claimed.Add(destination);
+                    additions++;
                 }
             }
             if (additions == 0) break;
@@ -113,11 +146,20 @@ internal sealed class ManagedTokenMap
         return result;
     }
 
+    private static string ScopeKey(IMetadataScope? scope) => scope switch
+    {
+        AssemblyNameReference assembly => assembly.FullName,
+        ModuleDefinition definition => definition.Assembly?.Name.FullName ?? definition.Name,
+        Mono.Cecil.ModuleReference module => module.Name,
+        _ => scope?.Name ?? ""
+    };
+    private static string CallSiteKey(CallSite site) =>
+        $"S|{site.CallingConvention}|{site.HasThis}|{site.ExplicitThis}|{site.ReturnType.FullName}({string.Join(",", site.Parameters.Select(p => p.ParameterType.FullName))})";
     private static string ReferenceKey(IMetadataTokenProvider provider) => provider switch
     {
-        TypeReference type => "T|" + type.FullName + "|" + type.Scope?.Name,
-        MethodReference method => "M|" + method.FullName + "|" + method.DeclaringType.Scope?.Name,
-        FieldReference field => "F|" + field.FullName + "|" + field.DeclaringType.Scope?.Name,
+        TypeReference type => "T|" + type.FullName + "|" + ScopeKey(type.Scope),
+        MethodReference method => "M|" + method.FullName + "|" + ScopeKey(method.DeclaringType.Scope),
+        FieldReference field => "F|" + field.FullName + "|" + ScopeKey(field.DeclaringType.Scope),
         _ => provider.MetadataToken.ToString()
     };
     private static IEnumerable<IMetadataTokenProvider> Providers(ModuleDefinition module)
@@ -212,7 +254,7 @@ internal sealed class ManagedTokenMap
                     var target = int.Parse(column[1..]);
                     if (column[0] == '#')
                     {
-                        var coded = Coded[target]; var tag = value & ((1 << coded.Bits) - 1); value >>= coded.Bits;
+                        var coded = Coded[target]; var tag = value & ((1 << coded.Bits) - 1); value >>>= coded.Bits;
                         if (tag >= coded.Tables.Length || coded.Tables[tag] < 0) { if (value != 0) return null; target = 0; } else target = coded.Tables[tag];
                     }
                     value = value == 0 ? 0 : target << 24 | value;

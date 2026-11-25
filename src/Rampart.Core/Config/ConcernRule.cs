@@ -26,48 +26,21 @@ public static class ConcernRules
     [
         (s, c) => R(s, c, "packaging.symbol-scrub", "nuclear.nanomites", ProtectionLevel.Light,
             ConcernSeverity.Risky, "RP01",
-            "Relocation stripping forces a fixed image base; nanomites rely on VEH dispatch that " +
-            "ASLR-off builds make easier to spot and patch.",
-            "Keep symbol scrub at Balanced or lower, or drop nanomites."),
+            "Nanomites rely on first-chance exception dispatch at protected sites; combining them with " +
+            "symbol scrubbing makes crash triage and exception diagnostics significantly harder without " +
+            "the private symbol map.",
+            "Retain the private .rmap.json sidecar for crash triage, or disable nanomites on paths that require standard crash dumps."),
 
-        (s, c) => R(s, c, "anti-inject.dynamic-code-policy", "virtualization.jit-handlers", ProtectionLevel.Light,
-            ConcernSeverity.Warning, "RP02",
-            "Dynamic code policy forbids new executable pages, but JIT-decrypted VM handlers copy " +
-            "handler bodies to a scratch page before executing them.",
-            "The engine falls back to in-place handler decryption for this build; expect slightly " +
-            "weaker handler isolation, or lower one of the two knobs."),
-
-        (s, c) => R(s, c, "memory.page-mode-decrypt", "memory.sleep-mask", ProtectionLevel.Heavy,
-            ConcernSeverity.Info, "RP03",
-            "Page-mode decryption and the sleep mask overlap: both re-encrypt non-executing code. " +
-            "The engine de-duplicates this; the second knob mostly adds cost."),
-
-        (s, c) => R(s, c, "anti-inject.cet-shadow-stack", ProtectionLevel.Balanced,
+        (s, c) => R(s, c, "anti-inject.cet-shadow-stack", ProtectionLevel.Light,
             ConcernSeverity.Info, "RP04",
             "CET shadow stack enforcement requires Windows 10 2004+ with hardware CET for full " +
-            "effect; older systems silently run the policy off."),
+            "effect; older systems silently run without hardware shadow stacks."),
 
-        (s, c) => R(s, c, "integrity.self-debug-port", ProtectionLevel.Light,
-            ConcernSeverity.Risky, "RP05",
-            "Self-debug port ownership holds the process debug object. Crash dumps from this process " +
-            "become harder to collect, and some AV heuristics flag self-debugging.",
-            "Acceptable for release builds; skip for binaries you need to debug or that must collect WER dumps."),
-
-        (s, c) => R(s, c, "anti-sandbox.human-gate", ProtectionLevel.Balanced,
+        (s, c) => R(s, c, "anti-sandbox.human-gate", ProtectionLevel.Light,
             ConcernSeverity.Warning, "RP06",
-            "The human-activity gate refuses sensitive paths when no recent input activity exists. " +
-            "Services and scheduled tasks see no keyboard/mouse input by design.",
-            "Keep at Light for unattended binaries, or exclude service binaries from this knob."),
-
-        (s, c) => R(s, c, "packaging.packer", "memory.at-rest-encryption", ProtectionLevel.Balanced,
-            ConcernSeverity.Info, "RP07",
-            "Packing already makes on-disk content ciphertext; at-rest encryption adds value only " +
-            "against mid-run memory scanners."),
-
-        (s, c) => R(s, c, "analysis.ida-bomb", ProtectionLevel.Heavy,
-            ConcernSeverity.Warning, "RP08",
-            "The autoanalysis bomb emits tens of thousands of synthetic prologues. Some AV/EDR " +
-            "engines count suspicious-looking density and may raise a score for the file."),
+            "The human-activity gate flags executions when no recent keyboard or mouse input is observed. " +
+            "Services, headless workers, and scheduled tasks see no interactive input by design.",
+            "Exclude unattended service binaries from anti-sandbox.human-gate."),
 
         (s, c) => R(s, c, "response.tool-response", ProtectionLevel.Light,
             ConcernSeverity.Warning, "RP10",

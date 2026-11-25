@@ -91,9 +91,12 @@ and their cost suits infrequent paths. VM re-keying adds a described stack frame
 other VM variants and the exception handler preserve leaf unwinding conventions.
 
 Environment probes, mapped-header changes, process-policy changes, response
-behavior, and background monitors remain explicit opt-ins rather than preset
-defaults. This keeps ordinary Balanced builds conservative while allowing a
-release profile to select and compatibility-test each runtime measure.
+behavior, and background monitors stay off in the `light`, `balanced`, `heavy`,
+and `maximum` presets and must be enabled explicitly (or via the `nuclear`
+profile, which enables supported runtime checks while keeping narrow-contract
+native-body transforms and packing off). This keeps general-purpose builds
+conservative while allowing a release profile to select and compatibility-test
+each runtime measure.
 
 These protections target PE32+ AMD64 executables. Native DLLs and
 already-protected inputs are rejected by this backend. Authenticode signatures do
@@ -133,15 +136,19 @@ scope, hashes, and per-method evidence.
 ## NativeAOT protection
 
 Rampart recognizes eligible Windows x64 NativeAOT outputs by structure rather
-than filename. The initial post-link backend intentionally allows only Light
-`packaging.header-disguise` and Light `packaging.symbol-scrub`. It snapshots
-runtime-owned PE, unwind, relocation, load-configuration, debug, and symbol data;
-each pass is transactional and the output is rejected if an invariant changes.
+than filename. The post-link backend intentionally allows only Light
+`packaging.header-disguise` (COFF timestamp and linker version) and Light
+`packaging.symbol-scrub` (DOS-stub content and section names; debug records,
+PDB paths, and COFF tables remain intact). It snapshots runtime-owned PE,
+unwind, relocation, load-configuration, debug, and symbol data; each pass is
+transactional and the output is rejected if an invariant changes.
 
 NativeAOT method-body rewriting, runtime hooks, packing, managed options, and
-ordinary native presets are not accepted after native compilation. Apply managed
-IL protection before NativeAOT compilation, then use the post-link allowlist, and
-finally apply Authenticode signing.
+native presets under strict compatibility are rejected after native compilation
+(use `"Preset": "off"` with explicit Light selections when combining
+`Compatibility: "Strict"` with NativeAOT). Apply managed IL protection before
+NativeAOT compilation, then use the post-link allowlist, and finally apply
+Authenticode signing.
 
 ## MSBuild publish integration
 

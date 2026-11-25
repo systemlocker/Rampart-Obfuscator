@@ -27,10 +27,10 @@ public static class ManagedVerification
         return result with
         {
             Verification = report,
-            Evidence = result.Evidence.Select(method => method with { VerificationStatus = "verified-nominal" }).ToArray(),
+            Evidence = result.Evidence.Select(method => method.VerificationStatus == "no-il-body" ? method : method with { VerificationStatus = "verified-nominal" }).ToArray(),
             Diagnostics = result.Diagnostics.Where(code => code != "MANAGED_NOMINAL_VERIFICATION_REQUIRED"
                 && !code.StartsWith("MANAGED_NOMINAL_VERIFICATION_REQUIRED:", StringComparison.Ordinal))
-                .Append("MANAGED_NOMINAL_VERIFIED").ToArray(),
+                .Append("MANAGED_NOMINAL_VERIFIED").Distinct(StringComparer.Ordinal).ToArray(),
         };
     }
 
@@ -64,7 +64,8 @@ public static class ManagedVerification
             return new("Microsoft.ILVerification/" + version, "verified", resolver.SystemIdentity,
                 Convert.ToHexString(SHA256.HashData(image)), methods, types, resolver.Evidence, resolver.FrameworkBindings)
             {
-                EngineSha256 = string.IsNullOrEmpty(assembly.Location) ? null : Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assembly.Location))),
+                EngineSha256 = !string.IsNullOrEmpty(assembly.Location) && File.Exists(assembly.Location)
+                    ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assembly.Location))) : null,
             };
         }
         catch (ManagedProtectionException) { throw; }

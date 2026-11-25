@@ -27,13 +27,26 @@ public sealed class RuntimeHardeningPass
     private const ulong FnvOffsetBasis = 14695981039346656037UL;
     private const ulong FnvPrime = 1099511628211UL;
     private const int MaximumMetadataBytes = 64 * 1024;
+    private const ushort ImageFileRelocsStripped = 0x0001;
+    // Allow SYSTEM full control; explicitly deny Everyone tampering/injection rights
+    // (TERMINATE | CREATE_THREAD | VM_OPERATION | VM_READ | VM_WRITE | DUP_HANDLE |
+    // CREATE_PROCESS | SUSPEND_RESUME | DELETE | WRITE_DAC | WRITE_OWNER = 0x000D08FB);
+    // allow Everyone only SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION (0x00101000).
+    internal const string ProcessDaclSddl = "D:P(A;;GA;;;SY)(D;;0x000D08FB;;;WD)(A;;0x00101000;;;WD)";
 
     private BuildContext? _context;
     private uint _monitorRva;
+    private uint _tlsCallbackRva;
+    private uint _latchRva;
     private bool _hasMonitor;
     private bool _postPhaseComplete;
-    private uint _postStringResponseRva;
     private bool _postStringResponseRegistered;
+    private RuntimeDetectionStateLayout? _state;
+    private IReadOnlyDictionary<string, uint>? _iat;
+    private bool _silentTaint;
+    private bool _toolResponse;
+    private bool _customMessage;
+    private ulong _taintConstant;
 
     /// <summary>Applies image metadata, emits response records, and builds the
     /// runtime monitor. Call after code/string/import rewriting and immediately
@@ -58,6 +71,7 @@ public sealed class RuntimeHardeningPass
         bool brand = Enabled(ctx, BrandOverlay);
         bool customMessage = Enabled(ctx, CustomMessages);
         bool responseProbe = silentTaint || toolResponse || customMessage;
+        bool guardCf = ctx.Pe.DllChars.HasFlag(DllCharacteristics.GuardCf);
 
         if (brand)
             EmitMetadata(ctx, "RMPBRND1", ctx.Settings.Watermark ?? $"build-{(ulong)ctx.Settings.Seed:X16}", BrandOverlay, "owner watermark");
@@ -74,13 +88,15 @@ public sealed class RuntimeHardeningPass
         if (mitigation)
         {
             DllCharacteristics before = ctx.Pe.DllChars;
-            ctx.Pe.DllChars = before
-                | DllCharacteristics.DynamicBase
-                | DllCharacteristics.HighEntropyVa
-                | DllCharacteristics.NxCompatible;
+            bool relocsStripped = (ctx.Pe.Characteristics & ImageFileRelocsStripped) != 0;
+            DllCharacteristics toAdd = relocsStripped
+                ? DllCharacteristics.NxCompatible
+                : DllCharacteristics.DynamicBase | DllCharacteristics.HighEntropyVa | DllCharacteristics.NxCompatible;
+            ctx.Pe.DllChars = before | toAdd;
             SetPolicyStatus(ctx, state!, 1UL << 2);
-            ctx.Log.Add(new(MitigationStack,
-                $"asserted PE ASLR/high-entropy-VA/DEP flags (0x{(ushort)before:X4} -> 0x{ctx.Pe.DllCharacteristicsRaw:X4}); preserved existing CFG metadata"));
+            ctx.Log.Add(new(MitigationStack, relocsStripped
+                ? $"asserted PE DEP flag (0x{(ushort)before:X4} -> 0x{ctx.Pe.DllCharacteristicsRaw:X4}); skipped ASLR flags because IMAGE_FILE_RELOCS_STRIPPED is set"
+                : $"asserted PE ASLR/high-entropy-VA/DEP flags (0x{(ushort)before:X4} -> 0x{ctx.Pe.DllCharacteristicsRaw:X4}); preserved existing CFG metadata"));
         }
 
         if (cet)
@@ -129,7 +145,10 @@ public sealed class RuntimeHardeningPass
         }
         if (iatHash)
             RuntimeDetectionState.Enable(ctx, RuntimeDetectionKind.IatModified);
-        if (tlsOwnership)
+        // Under Guard CF, Rampart avoids installing a new TLS callback entry, so
+        // defer TLS callback ownership enforcement rather than raising false positives.
+        bool checkTlsOwnership = tlsOwnership && !guardCf;
+        if (checkTlsOwnership)
             RuntimeDetectionState.Enable(ctx, RuntimeDetectionKind.TlsOwnershipLost);
         if (kernelWall || responseProbe)
             RuntimeDetectionState.Enable(ctx, RuntimeDetectionKind.SentinelModified);
@@ -146,13 +165,22 @@ public sealed class RuntimeHardeningPass
         ulong sentinelHash = HashQwords(sentinels, sentinelBasis);
         ulong taintConstant = (ulong)ctx.Rng.NextInt64() | 1UL;
 
+        // Shared atomic one-shot latch bits in .rmpd:
+        // bit 0 = ProcessDynamicCodePolicy applied, bit 1 = process DACL applied,
+        // bit 2 = silent-taint XOR applied to SessionKey.
+        _latchRva = ctx.AllocData(8, 8);
+        // Reserve the fixed-size 15-byte leaf TLS filter trampoline up front so
+        // EmitTlsOwnershipCheck knows the exact callback #0 RVA.
+        _tlsCallbackRva = guardCf ? 0 : ctx.Alloc(15, 16);
+
         _monitorRva = EmitMonitor(
             ctx,
             state!,
+            _latchRva,
+            _tlsCallbackRva,
             iat,
             codeRanges,
             codeBasis,
-            codeHash,
             iatSlots,
             sentinels,
             sentinelBasis,
@@ -162,18 +190,24 @@ public sealed class RuntimeHardeningPass
             iatHash,
             kernelWall || responseProbe,
             measurement,
-            tlsOwnership,
+            checkTlsOwnership,
             silentTaint,
             toolResponse,
             customMessage,
             taintConstant);
+        if (_tlsCallbackRva != 0)
+            WriteTlsTrampoline(ctx, _tlsCallbackRva, _monitorRva);
+
+        _state = state;
+        _iat = iat;
+        _silentTaint = silentTaint;
+        _toolResponse = toolResponse;
+        _customMessage = customMessage;
+        _taintConstant = taintConstant;
         _hasMonitor = true;
         ctx.RegisterInit(_monitorRva, "runtime hardening and integrity monitor");
-        if (responseProbe && ctx.MaximumFunctionLevel("strings.encryption") != ProtectionLevel.Off)
-            _postStringResponseRva = EmitPostStringResponse(ctx, state!, silentTaint,
-                taintConstant, customMessage, toolResponse, iat);
         if (dacl)
-            ctx.Log.Add(new(DaclHardening, "emitted process DACL policy denying create-thread and VM-write opens outside SYSTEM"));
+            ctx.Log.Add(new(DaclHardening, "emitted restrictive process DACL policy denying memory, thread, handle, and DACL tampering outside SYSTEM"));
         if (dynamicCode)
             ctx.Log.Add(new(DynamicCodePolicy, "emitted ProcessDynamicCodePolicy startup enforcement"));
         if (iatHash)
@@ -182,8 +216,10 @@ public sealed class RuntimeHardeningPass
             ctx.Log.Add(new(KernelWall, $"emitted {sentinels.Length} per-build sentinel probes with runtime verification"));
         if (measurement)
             ctx.Log.Add(new(MeasurementChannels, $"emitted salted code measurement over {codeRanges.Count} relocation-stable ranges"));
-        if (tlsOwnership)
+        if (checkTlsOwnership)
             ctx.Log.Add(new(TlsVehOwnership, "emitted TLS callback ownership verifier"));
+        else if (tlsOwnership)
+            ctx.Log.Add(new(TlsVehOwnership, "deferred TLS callback ownership check because Guard CF is enabled"));
         if (silentTaint)
             ctx.Log.Add(new(SilentTaint, "bound shared detection flags to an idempotent session-key taint response"));
         if (toolResponse)
@@ -202,37 +238,55 @@ public sealed class RuntimeHardeningPass
         if (_postStringResponseRegistered)
             throw new InvalidOperationException("Post-string response consumer was already registered.");
         _postStringResponseRegistered = true;
-        if (_postStringResponseRva != 0)
-            ctx.RegisterInit(_postStringResponseRva, "post-string detection response");
+        if (!_hasMonitor || (!_silentTaint && !_customMessage && !_toolResponse))
+            return;
+
+        // Emit lazily only when StringProtectionPass actually registered at
+        // least one string decryptor so images with zero encrypted strings do
+        // not carry a dead post-string response stub.
+        uint postStringRva = EmitPostStringResponse(ctx, _state!, _latchRva, _silentTaint,
+            _taintConstant, _customMessage, _toolResponse, _iat!);
+        ctx.RegisterInit(postStringRva, "post-string detection response");
     }
 
     private static uint EmitPostStringResponse(BuildContext ctx,
-        RuntimeDetectionStateLayout state, bool silentTaint, ulong taintConstant,
+        RuntimeDetectionStateLayout state, uint latchRva, bool silentTaint, ulong taintConstant,
         bool customMessage, bool toolResponse, IReadOnlyDictionary<string, uint> iat)
     {
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
             // Three saves align calls; reserve a separate Windows x64 home area.
-            a.PushR(Reg.Rbx).PushR(Reg.R13).PushR(Reg.R15).SubRi(Reg.Rsp, 0x20);
+            var pushes = new List<(Reg, byte)>();
+            foreach (Reg reg in new[] { Reg.Rbx, Reg.R13, Reg.R15 })
+            {
+                a.PushR(reg);
+                pushes.Add((reg, (byte)a.Position));
+            }
+            a.SubRi(Reg.Rsp, 0x20);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);
             a.MovRi(Reg.R13, state.Rva).AddRr(Reg.R13, Reg.R15);
-            EmitSharedResponseConsumer(a, silentTaint, taintConstant, customMessage, toolResponse, iat);
+            EmitSharedResponseConsumer(a, latchRva, silentTaint, taintConstant, customMessage, toolResponse, iat);
             a.AddRi(Reg.Rsp, 0x20).PopR(Reg.R15).PopR(Reg.R13).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
             if (customMessage)
             {
                 string message = ctx.Settings.CustomMessage ?? "Application integrity check failed.";
                 a.Label("response_message").Db(Encoding.UTF8.GetBytes(message + "\0"));
             }
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x20, prologEnd));
         }
 
-        int size = Build(0).Assemble().Length;
+        AntiDebugPass.BuiltRoutine probe = Build(0);
+        int size = probe.Assembler.Assemble().Length;
         uint rva = ctx.Alloc(size, 16);
-        byte[] code = Build(rva).Assemble();
+        AntiDebugPass.BuiltRoutine built = Build(rva);
+        byte[] code = built.Assembler.Assemble();
         if (code.Length != size)
             throw new InvalidOperationException("Post-string response size shifted between layout passes.");
         ctx.WriteStub(rva, code);
+        ExceptionTableBuilder.Register(ctx, rva, checked(rva + (uint)built.CodeEnd), built.UnwindInfo!);
         return rva;
     }
 
@@ -249,8 +303,15 @@ public sealed class RuntimeHardeningPass
         if (!_hasMonitor)
             return;
 
-        GuardCfBuilder.RegisterTarget(ctx, _monitorRva);
-        TlsBuilder.Install(ctx, _monitorRva);
+        if (ctx.Pe.DllChars.HasFlag(DllCharacteristics.GuardCf) || _tlsCallbackRva == 0)
+        {
+            ctx.Log.Add(new("runtime-hardening",
+                "skipped TLS callback installation to preserve Guard CF integrity; monitor executes through the entry-point init chain"));
+            return;
+        }
+
+        GuardCfBuilder.RegisterTarget(ctx, _tlsCallbackRva);
+        TlsBuilder.Install(ctx, _tlsCallbackRva);
         DataDirectory tls = ctx.Pe.Directory(DataDir.Tls);
         ulong callbacksVa = BinaryPrimitives.ReadUInt64LittleEndian(
             ctx.Pe.ReadRva(tls.RelativeVirtualAddress + 24, 8));
@@ -260,16 +321,36 @@ public sealed class RuntimeHardeningPass
             state.Rva + RuntimeDetectionStateLayout.TlsCallbacksRvaOffset,
             BitConverter.GetBytes((ulong)callbacksRva));
         ctx.Log.Add(new("runtime-hardening",
-            $"installed monitor RVA {_monitorRva:X8} as the outermost TLS callback"));
+            $"installed monitor TLS trampoline RVA {_tlsCallbackRva:X8} (target RVA {_monitorRva:X8}) as the outermost TLS callback"));
+    }
+
+    /// <summary>Writes a 15-byte leaf TLS callback trampoline that forwards
+    /// DLL_PROCESS_ATTACH (1) and DLL_THREAD_ATTACH (2) to the monitor while
+    /// ignoring detach notifications (0 and 3).</summary>
+    private static void WriteTlsTrampoline(BuildContext ctx, uint trampolineRva, uint monitorRva)
+    {
+        var a = new Asm();
+        // TLS callback ABI: (DllHandle=RCX, Reason=EDX, Reserved=R8).
+        a.Mov32Rr(Reg.Rax, Reg.Rdx); // 2B: 89 D0
+        a.Db(0xFF, 0xC8);            // 2B: dec eax (1->0, 2->1; 0->0xFFFFFFFF, 3->2)
+        a.Db(0x83, 0xF8, 0x01);      // 3B: cmp eax, 1
+        a.JccShortOver(Cc.Be, 1);    // 2B: jbe +1 (skip ret when Reason is 1 or 2)
+        a.Ret();                     // 1B: C3
+        a.JmpRva(trampolineRva, monitorRva); // 5B: tail-jump to monitor
+        byte[] bytes = a.Assemble();
+        if (bytes.Length != 15)
+            throw new InvalidOperationException($"Unexpected TLS trampoline size {bytes.Length}.");
+        ctx.WriteStub(trampolineRva, bytes);
     }
 
     private static uint EmitMonitor(
         BuildContext ctx,
         RuntimeDetectionStateLayout state,
+        uint latchRva,
+        uint tlsCallbackRva,
         IReadOnlyDictionary<string, uint> iat,
         IReadOnlyList<CodeRange> codeRanges,
         ulong codeBasis,
-        ulong codeHash,
         IReadOnlyList<uint> iatSlots,
         IReadOnlyList<ulong> sentinels,
         ulong sentinelBasis,
@@ -285,33 +366,40 @@ public sealed class RuntimeHardeningPass
         bool customMessage,
         ulong taintConstant)
     {
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
             // Five nonvolatile saves align RSP; 0x60 bytes cover shadow space,
             // SetSecurityInfo's stack arguments, and four DACL scratch slots.
-            a.PushR(Reg.Rbx).PushR(Reg.R12).PushR(Reg.R13).PushR(Reg.R14).PushR(Reg.R15);
+            var pushes = new List<(Reg, byte)>();
+            foreach (Reg reg in new[] { Reg.Rbx, Reg.R12, Reg.R13, Reg.R14, Reg.R15 })
+            {
+                a.PushR(reg);
+                pushes.Add((reg, (byte)a.Position));
+            }
             a.SubRi(Reg.Rsp, 0x60);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);
             a.MovRi(Reg.R13, state.Rva).AddRr(Reg.R13, Reg.R15);
 
             if (measurement && codeRanges.Count > 0)
-                EmitCodeMeasurement(a, codeBasis, codeHash, silentTaint, taintConstant, customMessage, toolResponse, iat);
+                EmitCodeMeasurement(a, codeBasis);
             if (iatHash && iatSlots.Count > 0)
-                EmitIatMeasurement(a, silentTaint, taintConstant, customMessage, toolResponse, iat);
+                EmitIatMeasurement(a);
             if (sentinelMonitor)
-                EmitSentinelMeasurement(a, sentinelBasis, sentinelHash, silentTaint, taintConstant, customMessage, toolResponse, iat);
-            if (tlsOwnership)
-                EmitTlsOwnershipCheck(a, selfRva, silentTaint, taintConstant, customMessage, toolResponse, iat);
+                EmitSentinelMeasurement(a, sentinelBasis, sentinelHash);
+            if (tlsOwnership && tlsCallbackRva != 0)
+                EmitTlsOwnershipCheck(a, tlsCallbackRva);
             if (dynamicCode)
-                EmitDynamicCodePolicy(a, iat["SetProcessMitigationPolicy"]);
+                EmitDynamicCodePolicy(a, latchRva, iat["SetProcessMitigationPolicy"]);
             if (dacl)
-                EmitDaclHardening(a, iat);
+                EmitDaclHardening(a, latchRva, iat);
 
-            EmitSharedResponseConsumer(a, silentTaint, taintConstant, customMessage, toolResponse, iat);
+            EmitSharedResponseConsumer(a, latchRva, silentTaint, taintConstant, customMessage, toolResponse, iat);
 
             a.AddRi(Reg.Rsp, 0x60);
             a.PopR(Reg.R15).PopR(Reg.R14).PopR(Reg.R13).PopR(Reg.R12).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
 
             a.Align(8).Label("code_ranges");
             foreach (CodeRange range in codeRanges)
@@ -329,39 +417,30 @@ public sealed class RuntimeHardeningPass
 
             if (dacl)
             {
-                // SYSTEM is granted first; the protected process then denies
-                // create-thread and VM-write opens from all other tokens while
-                // retaining the remaining ordinary process rights.
                 a.Align(2).Label("process_sddl");
-                a.Db(Encoding.Unicode.GetBytes(
-                    "D:P(A;;GA;;;SY)(D;;0x22;;;WD)(A;;0x1FFFDD;;;WD)\0"));
+                a.Db(Encoding.Unicode.GetBytes(ProcessDaclSddl + "\0"));
             }
             if (customMessage)
             {
                 string message = ctx.Settings.CustomMessage ?? "Application integrity check failed.";
                 a.Label("response_message").Db(Encoding.UTF8.GetBytes(message + "\0"));
             }
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x60, prologEnd));
         }
 
-        int size = Build(0).Assemble().Length;
+        AntiDebugPass.BuiltRoutine probe = Build(0);
+        int size = probe.Assembler.Assemble().Length;
         uint rva = ctx.Alloc(size, 16);
-        byte[] code = Build(rva).Assemble();
+        AntiDebugPass.BuiltRoutine built = Build(rva);
+        byte[] code = built.Assembler.Assemble();
         if (code.Length != size)
             throw new InvalidOperationException("Runtime-hardening monitor size shifted between layout passes.");
         ctx.WriteStub(rva, code);
+        ExceptionTableBuilder.Register(ctx, rva, checked(rva + (uint)built.CodeEnd), built.UnwindInfo!);
         return rva;
     }
 
-    private static void EmitCodeMeasurement(
-        Asm a,
-        ulong basis,
-        ulong expected,
-        bool taint,
-        ulong taintConstant,
-        bool customMessage,
-        bool toolResponse,
-        IReadOnlyDictionary<string, uint> iat)
+    private static void EmitCodeMeasurement(Asm a, ulong basis)
     {
         a.MovRm(Reg.Rbx, Reg.R13, RuntimeDetectionStateLayout.CodeMeasurementOffset);
         a.MovRi(Reg.R12, unchecked((long)basis));
@@ -383,13 +462,7 @@ public sealed class RuntimeHardeningPass
         a.Label("code_hash_ok");
     }
 
-    private static void EmitIatMeasurement(
-        Asm a,
-        bool taint,
-        ulong taintConstant,
-        bool customMessage,
-        bool toolResponse,
-        IReadOnlyDictionary<string, uint> iat)
+    private static void EmitIatMeasurement(Asm a)
     {
         a.MovRi(Reg.Rbx, unchecked((long)FnvOffsetBasis));
         a.LeaRip(Reg.R12, "iat_slots");
@@ -409,15 +482,7 @@ public sealed class RuntimeHardeningPass
         a.Label("iat_hash_ok");
     }
 
-    private static void EmitSentinelMeasurement(
-        Asm a,
-        ulong basis,
-        ulong expected,
-        bool taint,
-        ulong taintConstant,
-        bool customMessage,
-        bool toolResponse,
-        IReadOnlyDictionary<string, uint> iat)
+    private static void EmitSentinelMeasurement(Asm a, ulong basis, ulong expected)
     {
         a.MovRi(Reg.Rbx, unchecked((long)basis));
         a.LeaRip(Reg.R12, "sentinels");
@@ -433,14 +498,7 @@ public sealed class RuntimeHardeningPass
         a.Label("sentinel_ok");
     }
 
-    private static void EmitTlsOwnershipCheck(
-        Asm a,
-        uint selfRva,
-        bool taint,
-        ulong taintConstant,
-        bool customMessage,
-        bool toolResponse,
-        IReadOnlyDictionary<string, uint> iat)
+    private static void EmitTlsOwnershipCheck(Asm a, uint expectedCallbackRva)
     {
         // The post-entry phase records the final callback-array RVA. Reading
         // this private value keeps the check alive even when a selected header
@@ -449,7 +507,7 @@ public sealed class RuntimeHardeningPass
         a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "tls_lost");
         a.AddRr(Reg.Rax, Reg.R15);
         a.MovRm(Reg.Rcx, Reg.Rax);
-        a.MovRi(Reg.Rdx, selfRva).AddRr(Reg.Rdx, Reg.R15);
+        a.MovRi(Reg.Rdx, expectedCallbackRva).AddRr(Reg.Rdx, Reg.R15);
         a.CmpRr(Reg.Rcx, Reg.Rdx).Jcc(Cc.E, "tls_owned");
         a.Label("tls_lost");
         RuntimeDetectionState.EmitRecord(a, Reg.R13, RuntimeDetectionKind.TlsOwnershipLost,
@@ -457,15 +515,19 @@ public sealed class RuntimeHardeningPass
         a.Label("tls_owned");
     }
 
-    private static void EmitDynamicCodePolicy(Asm a, uint apiIatRva)
+    private static void EmitDynamicCodePolicy(Asm a, uint latchRva, uint apiIatRva)
     {
-        a.MovRi(Reg.Rax, 1).MovMr32(Reg.Rsp, Reg.Rax, 0x50); // ProhibitDynamicCode
-        a.MovRi(Reg.Rcx, 2);                                 // ProcessDynamicCodePolicy
+        // Apply process-wide dynamic-code mitigation once across TLS + entry invocations.
+        a.MovRi(Reg.Rcx, latchRva).AddRr(Reg.Rcx, Reg.R15);
+        a.LockBtsMi(Reg.Rcx, 0, 0).Jcc(Cc.B, "dynamic_policy_done");
+
+        a.Mov32Ri(Reg.Rax, 1).MovMr32(Reg.Rsp, Reg.Rax, 0x50); // ProhibitDynamicCode
+        a.Mov32Ri(Reg.Rcx, 2);                                 // ProcessDynamicCodePolicy
         a.LeaRd(Reg.Rdx, Reg.Rsp, 0x50);
-        a.MovRi(Reg.R8, 4);
+        a.Mov32Ri(Reg.R8, 4);
         EmitImportedCall(a, apiIatRva);
-        a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dynamic_policy_failed");
-        EmitOrState(a, RuntimeDetectionStateLayout.PolicyStatusOffset, 1UL << 0);
+        a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dynamic_policy_failed");
+        a.LockBtsMi(Reg.R13, RuntimeDetectionStateLayout.PolicyStatusOffset, 0);
         a.Jmp("dynamic_policy_done");
         a.Label("dynamic_policy_failed");
         RuntimeDetectionState.EmitRecord(a, Reg.R13, RuntimeDetectionKind.MitigationRejected,
@@ -473,35 +535,41 @@ public sealed class RuntimeHardeningPass
         a.Label("dynamic_policy_done");
     }
 
-    private static void EmitDaclHardening(Asm a, IReadOnlyDictionary<string, uint> iat)
+    private static void EmitDaclHardening(Asm a, uint latchRva, IReadOnlyDictionary<string, uint> iat)
     {
+        // Apply process DACL once across TLS attach + entry-point invocations.
+        a.MovRi(Reg.Rcx, latchRva).AddRr(Reg.Rcx, Reg.R15);
+        a.LockBtsMi(Reg.Rcx, 0, 1).Jcc(Cc.B, "dacl_done");
+
         // Scratch layout: +40 SD*, +48 ACL*, +50 BOOL present, +58 BOOL defaulted.
         a.XorRr(Reg.Rax, Reg.Rax);
         a.MovMr(Reg.Rsp, Reg.Rax, 0x40).MovMr(Reg.Rsp, Reg.Rax, 0x48);
         a.MovMr(Reg.Rsp, Reg.Rax, 0x50).MovMr(Reg.Rsp, Reg.Rax, 0x58);
 
-        a.LeaRip(Reg.Rcx, "process_sddl").MovRi(Reg.Rdx, 1);
+        a.LeaRip(Reg.Rcx, "process_sddl").Mov32Ri(Reg.Rdx, 1);
         a.LeaRd(Reg.R8, Reg.Rsp, 0x40).XorRr(Reg.R9, Reg.R9);
         EmitImportedCall(a, iat["ConvertStringSecurityDescriptorToSecurityDescriptorW"]);
-        a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_no_free");
+        a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_no_free");
 
         a.MovRm(Reg.Rcx, Reg.Rsp, 0x40).LeaRd(Reg.Rdx, Reg.Rsp, 0x50);
         a.LeaRd(Reg.R8, Reg.Rsp, 0x48).LeaRd(Reg.R9, Reg.Rsp, 0x58);
         EmitImportedCall(a, iat["GetSecurityDescriptorDacl"]);
-        a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_free");
-        a.MovRm32(Reg.Rax, Reg.Rsp, 0x50).TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_free");
+        a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_free");
+        a.MovRm32(Reg.Rax, Reg.Rsp, 0x50).Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_free");
         a.MovRm(Reg.Rax, Reg.Rsp, 0x48).TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "dacl_failed_free");
 
         a.XorRr(Reg.Rax, Reg.Rax).MovMr(Reg.Rsp, Reg.Rax, 0x20);
         a.MovRm(Reg.Rax, Reg.Rsp, 0x48).MovMr(Reg.Rsp, Reg.Rax, 0x28);
         a.XorRr(Reg.Rax, Reg.Rax).MovMr(Reg.Rsp, Reg.Rax, 0x30); // pSacl (argument 7)
-        a.MovRi(Reg.Rcx, -1).MovRi(Reg.Rdx, 6).MovRi(Reg.R8, 4).XorRr(Reg.R9, Reg.R9);
+        // DACL_SECURITY_INFORMATION (0x4) | PROTECTED_DACL_SECURITY_INFORMATION (0x80000000)
+        // prevents inherited ACEs from re-opening denied process access rights.
+        a.MovRi(Reg.Rcx, -1).Mov32Ri(Reg.Rdx, 6).Mov32Ri(Reg.R8, 0x80000004u).XorRr(Reg.R9, Reg.R9);
         EmitImportedCall(a, iat["SetSecurityInfo"]);
-        a.MovRr(Reg.R14, Reg.Rax);
+        a.Mov32Rr(Reg.R14, Reg.Rax);
         a.MovRm(Reg.Rcx, Reg.Rsp, 0x40);
         EmitImportedCall(a, iat["LocalFree"]);
-        a.TestRr(Reg.R14, Reg.R14).Jcc(Cc.Ne, "dacl_failed_no_free");
-        EmitOrState(a, RuntimeDetectionStateLayout.PolicyStatusOffset, 1UL << 1);
+        a.Test32Rr(Reg.R14, Reg.R14).Jcc(Cc.Ne, "dacl_failed_no_free");
+        a.LockBtsMi(Reg.R13, RuntimeDetectionStateLayout.PolicyStatusOffset, 1);
         a.Jmp("dacl_done");
 
         a.Label("dacl_failed_free");
@@ -533,6 +601,7 @@ public sealed class RuntimeHardeningPass
 
     private static void EmitSharedResponseConsumer(
         Asm a,
+        uint latchRva,
         bool silentTaint,
         ulong taintConstant,
         bool customMessage,
@@ -547,12 +616,14 @@ public sealed class RuntimeHardeningPass
         a.CmpRr(Reg.Rbx, Reg.Rax).Jcc(Cc.E, "shared_response_done");
         if (silentTaint)
         {
-            // Detection producers can taint from loader callbacks while this
-            // consumer runs on the monitor thread. Apply our contribution as a
-            // locked XOR so neither side can overwrite the other's update.
+            // Gate the session-key XOR with an atomic one-shot bit so concurrent
+            // threads can never apply the same XOR twice and cancel the taint.
+            a.MovRi(Reg.Rcx, latchRva).AddRr(Reg.Rcx, Reg.R15);
+            a.LockBtsMi(Reg.Rcx, 0, 2).Jcc(Cc.B, "shared_taint_done");
             a.MovRr(Reg.Rax, Reg.Rbx);
             a.MovRi(Reg.Rcx, unchecked((long)taintConstant)).XorRr(Reg.Rax, Reg.Rcx);
             a.LockXorMr(Reg.R13, Reg.Rax, RuntimeDetectionStateLayout.SessionKeyOffset);
+            a.Label("shared_taint_done");
         }
         a.MovMr(Reg.R13, Reg.Rbx, RuntimeDetectionStateLayout.RespondedFlagsOffset);
         EmitResponse(a, customMessage, toolResponse, iat);
@@ -562,13 +633,6 @@ public sealed class RuntimeHardeningPass
     private static void EmitImportedCall(Asm a, uint iatRva)
     {
         a.MovRi(Reg.Rax, iatRva).AddRr(Reg.Rax, Reg.R15).CallMem(Reg.Rax);
-    }
-
-    private static void EmitOrState(Asm a, int offset, ulong value)
-    {
-        a.MovRm(Reg.Rax, Reg.R13, offset).MovRi(Reg.Rcx, unchecked((long)value));
-        a.Db(0x48, 0x09, 0xC8); // or rax,rcx
-        a.MovMr(Reg.R13, Reg.Rax, offset);
     }
 
     private static List<CodeRange> BuildStableCodeRanges(BuildContext ctx)

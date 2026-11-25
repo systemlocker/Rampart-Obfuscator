@@ -54,8 +54,11 @@ public static class Lzss
     public static byte[] Compress(ReadOnlySpan<byte> input)
     {
         // Worst case is all literals: one byte per token plus one shared flag byte per
-        // 8 tokens, after the fixed header.
-        byte[] output = new byte[HeaderSize + input.Length + (input.Length + 7) / 8];
+        // 8 tokens, after the fixed header. Compute in 64-bit to avoid int overflow.
+        long worstCase = HeaderSize + (long)input.Length + ((long)input.Length + 7L) / 8L;
+        if (worstCase > Array.MaxLength)
+            throw new InvalidOperationException("Input is too large for LZSS compression.");
+        byte[] output = new byte[(int)worstCase];
         BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(0, HeaderSize), input.Length);
 
         // head[h] = most recent input position whose 3-byte hash is h (-1 = never seen).
@@ -170,17 +173,24 @@ public static class Lzss
 
                 // Copy forward one byte at a time: the source region can overlap the
                 // write cursor (offset < length), and each copied byte immediately
-                // becomes copyable source for the rest of the run. A match that would
-                // overrun the announced length simply fills to the end — decoding
-                // stops as soon as the announced length is reached (the encoder never
-                // emits such a token).
+                // becomes copyable source for the rest of the run. Reject matches
+                // that would overrun the announced length to match the x64 decoder.
+                if (length > output.Length - outPos)
+                    throw new InvalidOperationException(
+                        $"LZSS match at output position {outPos} with length {length} exceeds the announced output length of {output.Length} bytes.");
                 int src = outPos - offset;
-                for (int i = 0; i < length && outPos < output.Length; i++)
+                for (int i = 0; i < length; i++)
                     output[outPos++] = output[src + i];
             }
 
             flagBit++;
         }
+
+        // Reject trailing unread bytes so the managed decoder matches the x64 stub's
+        // exact stream-consumption check.
+        if (inPos != input.Length)
+            throw new InvalidOperationException(
+                $"LZSS stream has {input.Length - inPos} unexpected trailing byte(s) after the announced output.");
 
         return output;
     }

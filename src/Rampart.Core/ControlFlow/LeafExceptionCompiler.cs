@@ -17,13 +17,28 @@ public static partial class LeafControlFlowCompiler
         // branch boundaries, reachability, flag ownership, and the block budget.
         if (!TryCompile(source, new Random(0), out _, out reason)) return false;
         var instructions = new List<Instruction>();
+        int decodedEnd = 0;
         for (int offset = 0; offset < source.Length;)
         {
-            if (!TryDecode(source, offset, out var instruction)) throw new InvalidOperationException("CFG proof changed.");
-            instructions.Add(instruction!);
-            offset = instruction!.End;
+            if (TryDecode(source, offset, out var instruction))
+            {
+                instructions.Add(instruction!);
+                offset = instruction!.End;
+                decodedEnd = offset;
+                continue;
+            }
+            if (instructions.Count > 0 && instructions[^1].Kind == Kind.Return && IsTrailingPadding(source[offset..]))
+                break;
+            throw new InvalidOperationException("CFG proof changed.");
         }
-        if (instructions.Any(i => i.Kind is Kind.Jump or Kind.Conditional && i.Target <= i.Offset))
+        while (instructions.Count > 1 && instructions[^1].Kind == Kind.Plain
+            && instructions[^1].Bytes.Length == 1 && instructions[^1].Bytes[0] == 0x90
+            && instructions[^2].Kind == Kind.Return)
+        {
+            instructions.RemoveAt(instructions.Count - 1);
+            decodedEnd = instructions[^1].End;
+        }
+        if (HasCycle(instructions, decodedEnd))
             return Fail("exception transitions require an acyclic CFG", out reason);
         var asm = new Asm();
         var transitions = new List<(int Fault, int Taken, int Fallthrough, int Condition)>();
@@ -62,5 +77,44 @@ public static partial class LeafControlFlowCompiler
             conditional, other);
         reason = "";
         return true;
+    }
+
+    /// <summary>3-color DFS cycle detection over the decoded instruction CFG so
+    /// backward edges in acyclic layouts are distinguished from true loops.</summary>
+    private static bool HasCycle(List<Instruction> instructions, int endOffset)
+    {
+        var indexByOffset = new Dictionary<int, int>(instructions.Count);
+        for (int i = 0; i < instructions.Count; i++)
+            indexByOffset[instructions[i].Offset] = i;
+
+        // 0 = unvisited, 1 = on current DFS stack, 2 = completely explored
+        var color = new byte[instructions.Count];
+        bool Dfs(int node)
+        {
+            color[node] = 1;
+            Instruction inst = instructions[node];
+            if (inst.Kind is Kind.Jump or Kind.Conditional
+                && indexByOffset.TryGetValue(inst.Target, out int targetIdx))
+            {
+                if (color[targetIdx] == 1 || (color[targetIdx] == 0 && Dfs(targetIdx)))
+                    return true;
+            }
+            if (inst.Kind is Kind.Plain or Kind.Conditional
+                && inst.End < endOffset
+                && indexByOffset.TryGetValue(inst.End, out int nextIdx))
+            {
+                if (color[nextIdx] == 1 || (color[nextIdx] == 0 && Dfs(nextIdx)))
+                    return true;
+            }
+            color[node] = 2;
+            return false;
+        }
+
+        for (int i = 0; i < instructions.Count; i++)
+        {
+            if (color[i] == 0 && Dfs(i))
+                return true;
+        }
+        return false;
     }
 }

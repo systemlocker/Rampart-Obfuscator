@@ -35,7 +35,9 @@ public sealed class InjectionHunterPass
 
         var requests = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         AntiDebugPass.Request(requests, "KERNEL32.DLL", "GetModuleFileNameW");
-        AntiDebugPass.Request(requests, "KERNEL32.DLL", "GetWindowsDirectoryW");
+        // GetSystemWindowsDirectoryW always resolves the shared system Windows
+        // directory (avoiding per-user Terminal Services redirection).
+        AntiDebugPass.Request(requests, "KERNEL32.DLL", "GetSystemWindowsDirectoryW");
         AntiDebugPass.Request(requests, "NTDLL.DLL", "LdrRegisterDllNotification");
         IReadOnlyDictionary<string, uint> iat = AntiDebugPass.RuntimeImports.Append(ctx, requests);
 
@@ -52,13 +54,19 @@ public sealed class InjectionHunterPass
         int stateSize = WindowsPrefixOffset + MaximumPathCharacters * 2;
         callbackStateRva = ctx.AllocData(stateSize, 16);
 
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
             // Preserve every nonvolatile register used by the two prefix walks.
-            a.PushR(Reg.Rbx).PushR(Reg.Rsi).PushR(Reg.Rdi).PushR(Reg.R12);
-            a.PushR(Reg.R13).PushR(Reg.R14).PushR(Reg.R15);
-            a.MovRr(Reg.R12, Reg.Rcx); // notification reason
+            var pushes = new List<(Reg, byte)>();
+            foreach (Reg reg in new[] { Reg.Rbx, Reg.Rsi, Reg.Rdi, Reg.R12, Reg.R13, Reg.R14, Reg.R15 })
+            {
+                a.PushR(reg);
+                pushes.Add((reg, (byte)a.Position));
+            }
+            byte prologEnd = (byte)a.Position;
+            // NotificationReason is a ULONG (32-bit); zero-extend to ignore upper junk bits.
+            a.Mov32Rr(Reg.R12, Reg.Rcx);
             a.MovRr(Reg.R11, Reg.Rdx); // notification data (no calls below)
             a.LoadRuntimeBase(Reg.R15, selfRva);
             a.MovRr(Reg.R14, Reg.R15).AddRi(Reg.R14, checked((int)detectionState.Rva));
@@ -66,7 +74,7 @@ public sealed class InjectionHunterPass
 
             // LDR_DLL_NOTIFICATION_REASON_LOADED is 1; unloads do not create
             // new foreign code and are therefore left as passive telemetry.
-            a.MovRi(Reg.Rax, 1).CmpRr(Reg.R12, Reg.Rax).Jcc(Cc.Ne, "hunter_done");
+            a.Mov32Ri(Reg.Rax, 1).Cmp32Rr(Reg.R12, Reg.Rax).Jcc(Cc.Ne, "hunter_done");
             a.MovRm(Reg.Rax, Reg.R13, LoadCountOffset).IncR(Reg.Rax);
             a.MovMr(Reg.R13, Reg.Rax, LoadCountOffset);
 
@@ -109,13 +117,14 @@ public sealed class InjectionHunterPass
             a.Label("hunter_done").XorRr(Reg.Rax, Reg.Rax);
             a.PopR(Reg.R15).PopR(Reg.R14).PopR(Reg.R13).PopR(Reg.R12);
             a.PopR(Reg.Rdi).PopR(Reg.Rsi).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
 
             a.Align(16).Label("hunter_state");
             a.Dq(0, 0, 0, 0, 0, 0, 0, 0);
             a.Db(new byte[MaximumPathCharacters * 2]);
             a.Db(new byte[MaximumPathCharacters * 2]);
             a.Db(Encoding.ASCII.GetBytes("RMPT.INJECT.HUNTER\0"));
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0, prologEnd));
         }
 
         uint callbackRva = AntiDebugPass.WriteRoutine(ctx, Build, iat,
@@ -170,11 +179,17 @@ public sealed class InjectionHunterPass
         uint callbackRva,
         uint callbackStateRva)
     {
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.Rbx).PushR(Reg.R12).PushR(Reg.R13).PushR(Reg.R14).PushR(Reg.R15);
+            var pushes = new List<(Reg, byte)>();
+            foreach (Reg reg in new[] { Reg.Rbx, Reg.R12, Reg.R13, Reg.R14, Reg.R15 })
+            {
+                a.PushR(reg);
+                pushes.Add((reg, (byte)a.Position));
+            }
             a.SubRi(Reg.Rsp, 0x20);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);
             a.MovRi(Reg.R13, callbackStateRva).AddRr(Reg.R13, Reg.R15);
 
@@ -182,29 +197,45 @@ public sealed class InjectionHunterPass
             // separator, so ordinary sibling DLL/plugin loads remain trusted.
             a.LeaRd(Reg.R14, Reg.R13, ApplicationPrefixOffset);
             a.XorRr(Reg.Rcx, Reg.Rcx).MovRr(Reg.Rdx, Reg.R14);
-            a.MovRi(Reg.R8, MaximumPathCharacters).CallRip("ext::GetModuleFileNameW");
-            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "application_prefix_done");
-            a.MovRi(Reg.Rdx, MaximumPathCharacters).CmpRr(Reg.Rax, Reg.Rdx);
+            a.Mov32Ri(Reg.R8, MaximumPathCharacters).CallRip("ext::GetModuleFileNameW");
+            a.Mov32Rr(Reg.Rax, Reg.Rax); // zero-extend 32-bit DWORD return
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "application_prefix_done");
+            a.Mov32Ri(Reg.Rdx, MaximumPathCharacters).Cmp32Rr(Reg.Rax, Reg.Rdx);
             a.Jcc(Cc.Ae, "application_prefix_done");
             a.MovRr(Reg.Rbx, Reg.R14).MovRr(Reg.Rcx, Reg.Rax).ShlRi(Reg.Rcx, 1).AddRr(Reg.Rbx, Reg.Rcx);
             a.Label("application_prefix_scan");
             a.CmpRr(Reg.Rbx, Reg.R14).Jcc(Cc.E, "application_prefix_done");
-            a.SubRi(Reg.Rbx, 2).XorRr(Reg.Rdx, Reg.Rdx).MovRm8(Reg.Rdx, Reg.Rbx);
-            a.MovRi(Reg.Rcx, '\\').CmpRr(Reg.Rdx, Reg.Rcx).Jcc(Cc.Ne, "application_prefix_scan");
+            a.SubRi(Reg.Rbx, 2);
+            // Match the full 16-bit UTF-16 code unit U+005C ('\\') so non-ASCII
+            // BMP characters whose low byte happens to be 0x5C are not split on.
+            a.XorRr(Reg.Rdx, Reg.Rdx).MovRm8(Reg.Rdx, Reg.Rbx);
+            a.Mov32Ri(Reg.Rcx, '\\').Cmp32Rr(Reg.Rdx, Reg.Rcx).Jcc(Cc.Ne, "application_prefix_scan");
+            a.XorRr(Reg.Rdx, Reg.Rdx).MovRm8(Reg.Rdx, Reg.Rbx, 1);
+            a.Test32Rr(Reg.Rdx, Reg.Rdx).Jcc(Cc.Ne, "application_prefix_scan");
             a.MovRr(Reg.Rax, Reg.Rbx).SubRr(Reg.Rax, Reg.R14).ShrRi(Reg.Rax, 1).IncR(Reg.Rax);
             a.MovMr(Reg.R13, Reg.Rax, ApplicationPrefixLengthOffset);
             a.Label("application_prefix_done");
 
-            // WindowsDirectory does not normally include a trailing separator;
-            // append one so C:\\WindowsEvil cannot satisfy the allow prefix.
+            // SystemWindowsDirectory does not normally include a trailing separator;
+            // append one (when not already present) so C:\\WindowsEvil cannot match.
             a.LeaRd(Reg.R14, Reg.R13, WindowsPrefixOffset).MovRr(Reg.Rcx, Reg.R14);
-            a.MovRi(Reg.Rdx, MaximumPathCharacters - 1).CallRip("ext::GetWindowsDirectoryW");
-            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "windows_prefix_done");
-            a.MovRi(Reg.Rdx, MaximumPathCharacters - 2).CmpRr(Reg.Rax, Reg.Rdx);
+            a.Mov32Ri(Reg.Rdx, MaximumPathCharacters - 1).CallRip("ext::GetSystemWindowsDirectoryW");
+            a.Mov32Rr(Reg.Rax, Reg.Rax);
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "windows_prefix_done");
+            a.Mov32Ri(Reg.Rdx, MaximumPathCharacters - 2).Cmp32Rr(Reg.Rax, Reg.Rdx);
             a.Jcc(Cc.A, "windows_prefix_done");
             a.MovRr(Reg.Rbx, Reg.R14).MovRr(Reg.Rdx, Reg.Rax).ShlRi(Reg.Rdx, 1).AddRr(Reg.Rbx, Reg.Rdx);
-            a.MovRi(Reg.Rcx, '\\').MovMr8(Reg.Rbx, Reg.Rcx);
-            a.IncR(Reg.Rax).MovMr(Reg.R13, Reg.Rax, WindowsPrefixLengthOffset);
+            // Check whether the final UTF-16 code unit is already U+005C ('\\').
+            a.XorRr(Reg.Rdx, Reg.Rdx).MovRm8(Reg.Rdx, Reg.Rbx, -2);
+            a.Mov32Ri(Reg.Rcx, '\\').Cmp32Rr(Reg.Rdx, Reg.Rcx).Jcc(Cc.Ne, "windows_append_slash");
+            a.XorRr(Reg.Rdx, Reg.Rdx).MovRm8(Reg.Rdx, Reg.Rbx, -1);
+            a.Test32Rr(Reg.Rdx, Reg.Rdx).Jcc(Cc.E, "windows_store_len");
+            a.Label("windows_append_slash");
+            // Write full UTF-16 '\\' (0x005C) plus UTF-16 NUL (0x0000) in one dword.
+            a.Mov32Ri(Reg.Rcx, 0x0000005C).MovMr32(Reg.Rbx, Reg.Rcx);
+            a.IncR(Reg.Rax);
+            a.Label("windows_store_len");
+            a.MovMr(Reg.R13, Reg.Rax, WindowsPrefixLengthOffset);
             a.Label("windows_prefix_done");
 
             a.XorRr(Reg.Rcx, Reg.Rcx);
@@ -215,12 +246,13 @@ public sealed class InjectionHunterPass
 
             a.AddRi(Reg.Rsp, 0x20).PopR(Reg.R15).PopR(Reg.R14).PopR(Reg.R13);
             a.PopR(Reg.R12).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
             AntiDebugPass.AddExternalSlots(
                 a,
                 "GetModuleFileNameW",
-                "GetWindowsDirectoryW",
+                "GetSystemWindowsDirectoryW",
                 "LdrRegisterDllNotification");
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x20, prologEnd));
         }
 
         uint initRva = AntiDebugPass.WriteRoutine(ctx, Build, iat);

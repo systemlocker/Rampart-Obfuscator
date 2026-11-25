@@ -25,7 +25,9 @@ public static class LeafExceptionDispatcher
         a.TestRr(Reg.Rdx, Reg.Rdx).Jcc(Cc.E, "search");
         a.TestRr(Reg.R8, Reg.R8).Jcc(Cc.E, "search");
         a.MovRm32(Reg.Rax, Reg.Rdx).Mov32Ri(Reg.R11, ExceptionCode).CmpRr(Reg.Rax, Reg.R11).Jcc(Cc.Ne, "search");
-        a.MovRm32(Reg.Rax, Reg.Rdx, 4).AndRi(Reg.Rax, 1).Jcc(Cc.Ne, "search");
+        // Reject NONCONTINUABLE (0x1) and unwind-in-progress flags (UNWINDING 0x2,
+        // EXIT_UNWIND 0x4, TARGET_UNWIND 0x10 -> mask 0x17).
+        a.MovRm32(Reg.Rax, Reg.Rdx, 4).AndRi(Reg.Rax, 0x17).Jcc(Cc.Ne, "search");
         a.MovRm(Reg.Rdx, Reg.Rdx, 16).MovRm(Reg.Rax, Reg.R8, ContextRipOffset);
         a.CmpRr(Reg.Rdx, Reg.Rax).Jcc(Cc.Ne, "search");
         a.Label("anchor").LeaRip(Reg.R10, "anchor");

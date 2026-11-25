@@ -7,16 +7,61 @@ namespace Rampart.Managed;
 
 internal static class ManagedPolicy
 {
+    private const string CompilerGeneratedAttributeFullName = "System.Runtime.CompilerServices.CompilerGeneratedAttribute";
+
+    // Nested types carry an empty Namespace in ECMA-335 metadata; walk enclosing
+    // declaring types so namespace rules and policy checks see the logical namespace.
+    internal static string EffectiveNamespace(TypeReference? type)
+    {
+        while (type is TypeSpecification spec) type = spec.ElementType;
+        while (type is not null && string.IsNullOrEmpty(type.Namespace) && type.DeclaringType is not null)
+            type = type.DeclaringType;
+        return type?.Namespace ?? "";
+    }
+
+    internal static bool IsCompilerGenerated(TypeDefinition? type)
+    {
+        for (var current = type; current is not null; current = current.DeclaringType)
+            if (current.CustomAttributes.Any(a => a.AttributeType.FullName == CompilerGeneratedAttributeFullName))
+                return true;
+        return false;
+    }
+
+    internal static bool IsCompilerGenerated(MethodDefinition method) =>
+        method.CustomAttributes.Any(a => a.AttributeType.FullName == CompilerGeneratedAttributeFullName)
+        || IsCompilerGenerated(method.DeclaringType);
+
+    internal static bool AllowsTypeRename(TypeDefinition type, string originalFullName, ManagedProtectionOptions options)
+    {
+        var assembly = type.Module.Assembly.Name.FullName;
+        var moduleName = type.Module.Name;
+        var effectiveNamespace = EffectiveNamespace(type);
+        var generated = IsCompilerGenerated(type);
+        var included = true;
+        var rename = options.RenamePrivateMembers;
+        foreach (var rule in options.Rules)
+        {
+            if (rule.Method != "*" || rule.Signature != "*" || rule.SourceDocument != "*" || rule.MetadataToken is not null)
+                continue;
+            if (!Matches(rule.Assembly, assembly) || !Matches(rule.Module, moduleName)
+                || !Matches(rule.Namespace, effectiveNamespace) || !Matches(rule.Type, originalFullName)
+                || rule.GeneratedCode is { } expectedGenerated && expectedGenerated != generated)
+                continue;
+            included = rule.Include ?? included;
+            rename = rule.RenamePrivateMembers ?? rename;
+        }
+        return included && rename;
+    }
+
     internal static ManagedMethodIdentity Identity(MethodDefinition method)
     {
         var assembly = method.Module.Assembly.Name.FullName;
         var signature = method.FullName;
         var canonical = assembly + "|" + method.Module.Name + "|" + signature;
         return new ManagedMethodIdentity(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))), assembly,
-            method.Module.Name, method.DeclaringType.Namespace, method.DeclaringType.FullName, method.Name, signature,
+            method.Module.Name, EffectiveNamespace(method.DeclaringType), method.DeclaringType.FullName, method.Name, signature,
             method.MetadataToken.ToInt32(), method.DebugInformation.SequencePoints.FirstOrDefault()?.Document.Url,
-            method.CustomAttributes.Any(a => a.AttributeType.Name == "CompilerGeneratedAttribute")
-            || method.DeclaringType.CustomAttributes.Any(a => a.AttributeType.Name == "CompilerGeneratedAttribute"));
+            IsCompilerGenerated(method));
     }
 
     internal sealed record Selection(bool Included, bool Vm, bool Strings, bool Constants, bool ControlFlow, bool Rename);

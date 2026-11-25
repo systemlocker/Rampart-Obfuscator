@@ -35,10 +35,20 @@ public sealed class ApiConcealmentPass
         if (level == Config.ProtectionLevel.Off)
             return;
 
-        List<ImportedFunction> imports = ImportTable.Parse(ctx.Pe)
-            .Where(imported => SensitiveNames.Contains(imported.Name))
-            .ToList();
-        if (imports.Count == 0)
+        // Match both original loader IAT slots and private slots created by
+        // ImportConcealmentPass so both protections compose cleanly.
+        var sensitiveSlots = new Dictionary<uint, string>();
+        foreach (ImportedFunction imported in ImportTable.Parse(ctx.Pe))
+        {
+            if (SensitiveNames.Contains(imported.Name))
+                sensitiveSlots[imported.ThunkRva] = imported.Name;
+        }
+        foreach ((uint concealedSlotRva, ImportedFunction imported) in ctx.ConcealedImportSlots)
+        {
+            if (SensitiveNames.Contains(imported.Name))
+                sensitiveSlots[concealedSlotRva] = imported.Name;
+        }
+        if (sensitiveSlots.Count == 0)
         {
             ctx.Log.Add(new("api-concealment", "no sensitive imported APIs were present"));
             return;
@@ -48,6 +58,8 @@ public sealed class ApiConcealmentPass
         int rewritten = 0;
         foreach (FunctionDescriptor function in ctx.Functions)
         {
+            if (ctx.IsFunctionClaimed(function))
+                continue;
             if (!ctx.Pe.TryRvaToOffset(function.BeginRva, out int fileOffset))
                 continue;
 
@@ -70,27 +82,35 @@ public sealed class ApiConcealmentPass
                 bool exactRipEncoding = instruction.Length == 6
                     && code[position] == 0xFF
                     && code[position + 1] is 0x15 or 0x25;
-                ImportedFunction? imported = supportedTransfer && exactRipEncoding
-                    ? imports.FirstOrDefault(candidate => candidate.ThunkRva == instruction.RipTargetRva)
-                    : null;
+                bool isSensitive = supportedTransfer
+                    && exactRipEncoding
+                    && sensitiveSlots.ContainsKey(instruction.RipTargetRva);
 
-                if (imported is not null)
+                if (isSensitive)
                 {
-                    if (!wrappers.TryGetValue(imported.ThunkRva, out uint wrapperRva))
+                    uint slotRva = instruction.RipTargetRva;
+                    if (!wrappers.TryGetValue(slotRva, out uint wrapperRva))
                     {
-                        wrapperRva = EmitWrapper(ctx, imported);
-                        wrappers.Add(imported.ThunkRva, wrapperRva);
+                        if (!TryEmitWrapper(ctx, slotRva, instructionRva, out wrapperRva))
+                        {
+                            position += instruction.Length;
+                            continue;
+                        }
+                        wrappers.Add(slotRva, wrapperRva);
                     }
 
-                    long displacement = (long)wrapperRva - (instructionRva + 5L);
+                    // Place the 1-byte NOP BEFORE the 5-byte CALL/JMP (`90 E8 rel32` /
+                    // `90 E9 rel32`) so the pushed return address equals the exact
+                    // original byte after the 6-byte `FF 15` (preserving unwind/EH tables).
+                    long displacement = (long)wrapperRva - (instructionRva + 6L);
                     if (displacement is >= int.MinValue and <= int.MaxValue)
                     {
-                        code[position] = instruction.Mnemonic == X64Mnemonic.CallIndirect
+                        code[position] = 0x90;
+                        code[position + 1] = instruction.Mnemonic == X64Mnemonic.CallIndirect
                             ? (byte)0xE8
                             : (byte)0xE9;
                         BinaryPrimitives.WriteInt32LittleEndian(
-                            code.Slice(position + 1, 4), checked((int)displacement));
-                        code[position + 5] = 0x90;
+                            code.Slice(position + 2, 4), checked((int)displacement));
                         rewritten++;
                     }
                 }
@@ -103,13 +123,25 @@ public sealed class ApiConcealmentPass
             $"routed {rewritten} sensitive call site(s) through {wrappers.Count} local wrapper thunk(s)"));
     }
 
-    private static uint EmitWrapper(BuildContext ctx, ImportedFunction imported)
+    private static bool TryEmitWrapper(BuildContext ctx, uint slotRva, uint callerRva, out uint wrapperRva)
     {
+        wrapperRva = 0;
+        // Pre-check approximate stub reach before allocating so out-of-range
+        // images do not leave orphan wrapper thunks in .rmpt.
+        uint predictedStub = ctx.Stub is not null
+            ? ctx.Stub.VirtualAddress + ctx.Stub.SizeOfRawData
+            : ctx.Pe.SizeOfImage;
+        long roughCallerDisp = (long)predictedStub - (callerRva + 6L);
+        long roughSlotDisp = (long)slotRva - (predictedStub + 6L);
+        if (roughCallerDisp is < int.MinValue or > int.MaxValue
+            || roughSlotDisp is < int.MinValue or > int.MaxValue)
+            return false;
+
         // jmp qword ptr [rip+disp32]. A direct CALL from target code enters this
         // six-byte tail thunk; the imported function returns straight to the
         // original caller, so no stack or unwind contract changes.
         uint rva = ctx.Alloc(6, 16);
-        long displacement = (long)imported.ThunkRva - (rva + 6L);
+        long displacement = (long)slotRva - (rva + 6L);
         if (displacement is < int.MinValue or > int.MaxValue)
             throw new NotSupportedException("Imported API slot is outside the x64 RIP-relative wrapper range.");
 
@@ -118,6 +150,7 @@ public sealed class ApiConcealmentPass
         wrapper[1] = 0x25;
         BinaryPrimitives.WriteInt32LittleEndian(wrapper[2..], checked((int)displacement));
         ctx.WriteStub(rva, wrapper);
-        return rva;
+        wrapperRva = rva;
+        return true;
     }
 }

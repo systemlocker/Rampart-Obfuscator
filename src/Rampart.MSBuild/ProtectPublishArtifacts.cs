@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
@@ -50,9 +51,12 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
             Directory.CreateDirectory(stage);
             PreparedConfiguration PrepareConfiguration(string? configurationFile)
             {
-                string? suppliedConfiguration = string.IsNullOrEmpty(configurationFile) ? null : File.ReadAllText(configurationFile);
+                string? resolvedConfigPath = string.IsNullOrWhiteSpace(configurationFile) ? null : Path.GetFullPath(configurationFile);
+                string? suppliedConfiguration = resolvedConfigPath is null ? null : File.ReadAllText(resolvedConfigPath);
                 var settings = suppliedConfiguration is null ? new ProtectionSettings()
                     : ProtectionSettingsJson.Deserialize(suppliedConfiguration);
+                if (resolvedConfigPath is not null && Path.GetDirectoryName(resolvedConfigPath) is { } configDirectory)
+                    ResolveRelativePaths(settings, configDirectory);
                 if (kind == ProtectionTargetKind.ManagedIl && suppliedConfiguration is not null)
                 {
                     using var supplied = JsonDocument.Parse(suppliedConfiguration);
@@ -83,7 +87,8 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
                     }
                     settings.Targets.Managed.Verification ??= new();
                     var verification = settings.Targets.Managed.Verification;
-                    verification.SystemModuleName = VerificationSystemModule;
+                    // Preserve any explicit SystemModuleName supplied in user configuration.
+                    verification.SystemModuleName ??= VerificationSystemModule;
                     // Use the references chosen by this SDK compilation. Inspecting
                     // the build host's own runtime would silently verify against a
                     // different target framework in multi-targeted projects.
@@ -92,12 +97,42 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
                     // do not pass native PE files to the managed metadata verifier.
                     // Explicit user references are never filtered, and malformed PE
                     // or managed metadata still fails instead of being omitted.
-                    var sdkReferences = VerificationReferences.Select(item => Path.GetFullPath(item.ItemSpec)).Where(IsManagedSdkReference).ToArray();
+                    // Primary compile-time references (ReferencePath / IlcReference) are kept
+                    // intact so genuine compile-graph ambiguity still fails verification.
+                    // Supplemental publish-list DLLs add only non-runtime-pack assemblies whose
+                    // simple name is absent from the compile-time set, preventing self-contained
+                    // runtime packs or lib/ copies from colliding with ref-pack assemblies.
+                    var primaryReferences = new List<string>();
+                    var primaryAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var supplementalItems = new List<ITaskItem>();
+                    foreach (var referenceItem in VerificationReferences)
+                    {
+                        if (referenceItem.GetMetadata("RampartReferenceRole").Equals("Supplemental", StringComparison.OrdinalIgnoreCase))
+                        {
+                            supplementalItems.Add(referenceItem);
+                            continue;
+                        }
+                        string fullPath = Path.GetFullPath(referenceItem.ItemSpec);
+                        if (!File.Exists(fullPath) || !TryReadManagedSdkReference(fullPath, out string? assemblyName)) continue;
+                        primaryReferences.Add(fullPath);
+                        if (assemblyName is not null) primaryAssemblyNames.Add(assemblyName);
+                    }
+                    var supplementalReferences = new List<string>();
+                    foreach (var referenceItem in supplementalItems)
+                    {
+                        if (IsRuntimePackItem(referenceItem)) continue;
+                        string fullPath = Path.GetFullPath(referenceItem.ItemSpec);
+                        if (!File.Exists(fullPath) || !TryReadManagedSdkReference(fullPath, out string? assemblyName)) continue;
+                        if (assemblyName is not null && primaryAssemblyNames.Contains(assemblyName)) continue;
+                        supplementalReferences.Add(fullPath);
+                    }
+                    var sdkReferences = primaryReferences.Concat(supplementalReferences).ToArray();
                     verification.ReferencePaths = verification.ReferencePaths.Concat(sdkReferences)
                         .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToList();
                     verification.FrameworkReferencePaths = verification.FrameworkReferencePaths.Concat(VerificationReferences
                         .Where(item => !string.IsNullOrEmpty(item.GetMetadata("FrameworkReferenceName")))
-                        .Concat(FrameworkVerificationReferences).Select(item => Path.GetFullPath(item.ItemSpec)).Where(IsManagedSdkReference))
+                        .Concat(FrameworkVerificationReferences).Select(item => Path.GetFullPath(item.ItemSpec))
+                        .Where(File.Exists).Where(IsManagedSdkReference))
                         .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToList();
                     if (verification.ReferencePaths.Count == 0)
                         throw new InvalidOperationException("RP_PUBLISH_VERIFICATION_REFERENCES: Target framework references were not supplied by the SDK.");
@@ -142,15 +177,7 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
                     throw new InvalidOperationException("RP_PUBLISH_SELECTION_AMBIGUOUS: More than one publish input has a selected assembly name.");
             }
             string tool = Path.GetFullPath(WorkerTool);
-            string toolHash = FileHash(tool);
-            // Same-version development builds must not reuse artifacts from old
-            // Core/Cecil code. Package versions remain part of the digest too.
-            string core = Path.Combine(Path.GetDirectoryName(tool)!, "Rampart.Core.dll");
-            if (File.Exists(core)) toolHash += FileHash(core);
-            foreach (string dependency in Directory.EnumerateFiles(Path.GetDirectoryName(tool)!, "*.dll").Order(StringComparer.Ordinal))
-                toolHash += FileHash(dependency);
-            string dependencies = Path.ChangeExtension(tool, ".deps.json");
-            if (File.Exists(dependencies)) toolHash += FileHash(dependencies);
+            string toolHash = ComputeToolFingerprint(tool);
             var replacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var symbolReplacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var omittedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -180,35 +207,51 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
                 byte[] bytes = ProtectionPipeline.ReadInput(input);
                 var classification = TargetClassifier.Classify(bytes, input);
                 if (!classification.CanProtect || classification.Target.Kind != kind)
+                {
+                    if (classification.ReasonCode is "target.managed-platform" or "target.nativeaot-platform" or "target.native-platform")
+                        throw new InvalidOperationException("RP_PUBLISH_PLATFORM: The target platform or architecture is unsupported for this publish stage.");
                     throw new InvalidOperationException("RP_PUBLISH_ORDER: Protect pure IL before native compilation or bundling, and NativeAOT before signing.");
-                if (classification.Target.SigningState == "authenticode-present"
+                }
+                if (classification.Target.SigningState.Contains("authenticode-present", StringComparison.Ordinal)
                     || classification.Target.CompatibilityFeatures.Contains("authenticode-present"))
                     throw new InvalidOperationException("RP_SIGNING_ORDER: Apply Authenticode signing after publish protection.");
                 string? inputPdb = File.Exists(Path.ChangeExtension(input, ".pdb")) ? Path.ChangeExtension(input, ".pdb") : null;
-                string key = Hash(Encoding.UTF8.GetBytes(string.Join("\n", inputHash, inputPdb is null ? "" : FileHash(inputPdb),
+                string key = Hash(Encoding.UTF8.GetBytes(string.Join("\n", name, inputHash, inputPdb is null ? "" : FileHash(inputPdb),
                     toolHash, typeof(ProtectionPipeline).Assembly.GetName().Version, classification.Target.Kind,
                     classification.Target.Architecture, configHash, referenceHash, seed.ToString(CultureInfo.InvariantCulture))));
+                // Keep protected publish binaries and symbols separate from private
+                // build metadata (.rmap.json, configuration.json, cache.json) so
+                // PrimaryOutputDirectory never leaks private maps into publish output.
                 string outputDirectory = Path.Combine(stage, key);
+                string metaDirectory = Path.Combine(stage, key + "-meta");
                 Directory.CreateDirectory(outputDirectory);
+                Directory.CreateDirectory(metaDirectory);
                 string output = Path.Combine(outputDirectory, name);
-                string cachePath = Path.Combine(outputDirectory, "cache.json");
+                string cachePath = Path.Combine(metaDirectory, "cache.json");
                 string outputPdb = Path.ChangeExtension(output, ".pdb");
-                string outputMap = Path.ChangeExtension(output, ".rmap.json");
+                string outputMap = Path.Combine(metaDirectory, Path.GetFileNameWithoutExtension(name) + ".rmap.json");
                 bool hit = false;
                 if (cacheable && File.Exists(cachePath) && File.Exists(output))
                 {
-                    CacheRecord? cached = JsonSerializer.Deserialize<CacheRecord>(File.ReadAllText(cachePath));
-                    hit = cached?.Key == key && cached.OutputSha256 == FileHash(output)
-                        && (cached.PdbSha256 is null ? !File.Exists(outputPdb) : File.Exists(outputPdb) && cached.PdbSha256 == FileHash(outputPdb))
-                        && cached.MapSha256 is not null && File.Exists(outputMap) && cached.MapSha256 == FileHash(outputMap);
+                    try
+                    {
+                        CacheRecord? cached = JsonSerializer.Deserialize<CacheRecord>(File.ReadAllText(cachePath));
+                        hit = cached?.Key == key && cached.OutputSha256 == FileHash(output)
+                            && (cached.PdbSha256 is null ? !File.Exists(outputPdb) : File.Exists(outputPdb) && cached.PdbSha256 == FileHash(outputPdb))
+                            && cached.MapSha256 is not null && File.Exists(outputMap) && cached.MapSha256 == FileHash(outputMap);
+                    }
+                    catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
+                    {
+                        hit = false;
+                    }
                 }
                 if (!hit)
                 {
-                    string configPath = Path.Combine(outputDirectory, "configuration.json");
-                    File.WriteAllText(configPath, configuration);
-                    RunWorker(tool, input, output, configPath, kind);
+                    string configPath = Path.Combine(metaDirectory, "configuration.json");
+                    WriteTextAtomic(configPath, configuration);
+                    RunWorker(tool, input, output, outputMap, configPath, kind);
                     var cache = new CacheRecord(key, FileHash(output), File.Exists(outputPdb) ? FileHash(outputPdb) : null, FileHash(outputMap));
-                    File.WriteAllText(cachePath, JsonSerializer.Serialize(cache));
+                    WriteTextAtomic(cachePath, JsonSerializer.Serialize(cache));
                 }
                 replacements.Add(input, output);
                 if (inputPdb is not null)
@@ -260,21 +303,89 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
             string code = error.Message.Split(':')[0];
             if (!IsReasonCode(code)) code = "RP_PUBLISH_FAILED";
             Log.LogError(null, code, null, null, 0, 0, 0, 0,
-                "Rampart publish protection failed. Compiler outputs were preserved; review the selected target, configuration and publish order.");
+                $"Rampart publish protection failed ({code}). Compiler outputs were preserved; review the selected target, configuration and publish order.");
             return false;
         }
     }
 
-    private static void RunWorker(string tool, string input, string output, string config, ProtectionTargetKind kind)
+    private static void ResolveRelativePaths(ProtectionSettings settings, string configDirectory)
     {
-        var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (string argument in new[] { tool, "protect", input, "--out", output, "--config", config, "--force", "--json" }) start.ArgumentList.Add(argument);
+        for (int i = 0; i < settings.SymbolSources.Count; i++)
+            if (!Path.IsPathFullyQualified(settings.SymbolSources[i]))
+                settings.SymbolSources[i] = Path.GetFullPath(Path.Combine(configDirectory, settings.SymbolSources[i]));
+        if (settings.PdbTool is not null && !Path.IsPathFullyQualified(settings.PdbTool))
+            settings.PdbTool = Path.GetFullPath(Path.Combine(configDirectory, settings.PdbTool));
+        if (settings.Targets?.Managed?.Verification is { } verification)
+        {
+            for (int i = 0; i < verification.ReferencePaths.Count; i++)
+                if (!Path.IsPathFullyQualified(verification.ReferencePaths[i]))
+                    verification.ReferencePaths[i] = Path.GetFullPath(Path.Combine(configDirectory, verification.ReferencePaths[i]));
+            for (int i = 0; i < verification.FrameworkReferencePaths.Count; i++)
+                if (!Path.IsPathFullyQualified(verification.FrameworkReferencePaths[i]))
+                    verification.FrameworkReferencePaths[i] = Path.GetFullPath(Path.Combine(configDirectory, verification.FrameworkReferencePaths[i]));
+        }
+    }
+
+    private static string ComputeToolFingerprint(string tool)
+    {
+        // Same-version development builds must not reuse artifacts from old
+        // Core/Cecil code. Deduplicate tool assemblies and include deps + runtimeconfig.
+        string toolDirectory = Path.GetDirectoryName(tool)!;
+        var files = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal) { tool };
+        foreach (string dependency in Directory.EnumerateFiles(toolDirectory, "*.dll"))
+            files.Add(Path.GetFullPath(dependency));
+        string deps = Path.ChangeExtension(tool, ".deps.json");
+        if (File.Exists(deps)) files.Add(Path.GetFullPath(deps));
+        string runtimeConfig = Path.ChangeExtension(tool, ".runtimeconfig.json");
+        if (File.Exists(runtimeConfig)) files.Add(Path.GetFullPath(runtimeConfig));
+        var sb = new StringBuilder();
+        foreach (string file in files.Order(StringComparer.Ordinal))
+            sb.Append(Path.GetFileName(file)).Append('=').Append(FileHash(file)).Append('\n');
+        return Hash(Encoding.UTF8.GetBytes(sb.ToString()));
+    }
+
+    private static string ResolveDotnetHost()
+    {
+        string? envHost = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        if (!string.IsNullOrWhiteSpace(envHost) && File.Exists(envHost)) return envHost;
+        string? processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath)
+            && Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(processPath))
+            return processPath;
+        return "dotnet";
+    }
+
+    private static void WriteTextAtomic(string path, string content)
+    {
+        string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temp, content);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                try { File.Delete(temp); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            }
+        }
+    }
+
+    private static void RunWorker(string tool, string input, string output, string symbolMap, string config, ProtectionTargetKind kind)
+    {
+        var start = new ProcessStartInfo(ResolveDotnetHost()) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (string argument in new[] { tool, "protect", input, "--out", output, "--symbol-map", symbolMap, "--config", config, "--force", "--json" })
+            start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("RP_WORKER_START: Cannot start protection.");
         var outputRead = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
         var errorRead = ReadDiagnosticPrefix(process.StandardError);
         if (!process.WaitForExit(660000))
         {
-            process.Kill(entireProcessTree: true);
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { /* Process exited before kill. */ }
             process.WaitForExit();
             throw new InvalidOperationException("RP_WORKER_LIMIT: Protection timed out.");
         }
@@ -296,12 +407,32 @@ public sealed class ProtectPublishArtifacts : Microsoft.Build.Utilities.Task
             throw new InvalidOperationException("RP_WORKER_OUTPUT: The worker produced an invalid artifact.");
     }
 
-    private static bool IsManagedSdkReference(string path)
+    private static bool IsManagedSdkReference(string path) => TryReadManagedSdkReference(path, out _);
+
+    private static bool TryReadManagedSdkReference(string path, out string? assemblyName)
     {
+        assemblyName = null;
         using var stream = File.OpenRead(path);
         using var reader = new PEReader(stream);
         if (reader.PEHeaders.PEHeader is null) throw new InvalidDataException("RP_PUBLISH_VERIFICATION_REFERENCES: A compiler reference is not a PE image.");
-        return reader.PEHeaders.CorHeader is not null;
+        if (reader.PEHeaders.CorHeader is null) return false;
+        if (reader.HasMetadata)
+        {
+            var metadata = reader.GetMetadataReader();
+            if (metadata.IsAssembly)
+                assemblyName = metadata.GetString(metadata.GetAssemblyDefinition().Name);
+        }
+        return true;
+    }
+
+    private static bool IsRuntimePackItem(ITaskItem item)
+    {
+        string packageId = item.GetMetadata("NuGetPackageId");
+        if (packageId.StartsWith("runtimepack.", StringComparison.OrdinalIgnoreCase))
+            packageId = packageId[12..];
+        return packageId.StartsWith("Microsoft.NETCore.App.Runtime.", StringComparison.OrdinalIgnoreCase)
+            || packageId.StartsWith("Microsoft.WindowsDesktop.App.Runtime.", StringComparison.OrdinalIgnoreCase)
+            || packageId.StartsWith("Microsoft.AspNetCore.App.Runtime.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsReasonCode(string code) => code.Length is > 0 and <= 80

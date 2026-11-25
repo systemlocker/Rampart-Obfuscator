@@ -20,9 +20,9 @@ public sealed class HeaderDisguisePass
         var pe = ctx.Pe;
         var rng = ctx.Rng;
 
-        // Timestamps: plausible build-time values, stable per build seed. A
-        // plausible fake beats a zero — zero is itself a packer heuristic.
-        pe.TimeDateStamp = (uint)(1_700_000_000 + rng.NextInt64(0, 200_000_000));
+        // Timestamps: plausible past build-time values (2021-2025), stable per
+        // build seed. A plausible fake beats a zero or future timestamp.
+        pe.TimeDateStamp = (uint)(1_609_459_200 + rng.NextInt64(0, 157_680_000));
         pe.LinkerVersion = ((byte)rng.Next(10, 15), (byte)rng.Next(0, 33));
 
         if (level >= Config.ProtectionLevel.Heavy)
@@ -36,11 +36,11 @@ public sealed class HeaderDisguisePass
             if (!export.IsEmpty && export.Size >= 40)
                 pe.WriteRva(export.RelativeVirtualAddress + 4, BitConverter.GetBytes(pe.TimeDateStamp));
             var debug = pe.Directory(DataDir.Debug);
-            if (!debug.IsEmpty)
+            if (!debug.IsEmpty && debug.Size >= 28)
             {
-                if (debug.Size % 28 != 0) throw new BadImageFormatException("Incomplete debug directory.");
-                for (uint offset = 0; offset < debug.Size; offset += 28)
-                    pe.WriteRva(debug.RelativeVirtualAddress + offset + 4, BitConverter.GetBytes(pe.TimeDateStamp));
+                uint alignedSize = debug.Size - (debug.Size % 28);
+                for (uint offset = 0; offset < alignedSize; offset += 28)
+                    pe.WriteRva(checked(debug.RelativeVirtualAddress + offset + 4), BitConverter.GetBytes(pe.TimeDateStamp));
             }
             // Import timestamps are binding state, not cosmetic build identity.
             // They must not be changed to imitate the COFF timestamp.
@@ -51,8 +51,7 @@ public sealed class HeaderDisguisePass
         {
             // Decoy PDB path in the DOS-stub area: plausible string, points at
             // nothing. Static tooling scanning for "*.pdb" finds this first.
-            var probe = pe.ToBytes();
-            int lfanew = BinaryPrimitives.ReadInt32LittleEndian(probe.AsSpan(0x3C));
+            int lfanew = pe.DosHeaderLength;
             string decoy = BuildDecoyPdbPath(rng);
             var bytes = Encoding.ASCII.GetBytes(decoy);
             int at = 0x78;

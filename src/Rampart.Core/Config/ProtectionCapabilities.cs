@@ -65,8 +65,12 @@ public static class ProtectionCapabilities
     public static ProtectionLevel MaxReadyLevel(string knobId) =>
         ReadyLevels.TryGetValue(knobId, out var level) ? level : ProtectionLevel.Off;
 
-    public static ProtectionLevel ClampToReady(string knobId, ProtectionLevel requested) =>
-        (ProtectionLevel)Math.Min((int)requested, (int)MaxReadyLevel(knobId));
+    public static ProtectionLevel ClampToReady(string knobId, ProtectionLevel requested)
+    {
+        if (!Enum.IsDefined(requested))
+            throw new ArgumentOutOfRangeException(nameof(requested), requested, $"Invalid protection level {(int)requested}.");
+        return (ProtectionLevel)Math.Min((int)requested, (int)MaxReadyLevel(knobId));
+    }
 
     /// <summary>Knobs whose work can be selected at individual function scope.</summary>
     public static readonly HashSet<string> FunctionScopedKnobs = new(StringComparer.Ordinal)
@@ -97,6 +101,12 @@ public static class ProtectionCapabilities
     {
         _ = Presets.DefaultLevel(settings.Preset, catalog.All[0]);
 
+        foreach (var tag in settings.ThreatFocus)
+        {
+            if (!ThreatTags.All.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                throw new ArgumentException($"Unknown threat-focus tag '{tag}'. Valid: {string.Join(", ", ThreatTags.All)}.");
+        }
+
         foreach (var (id, level) in settings.Knobs)
         {
             _ = catalog.Get(id);
@@ -122,12 +132,18 @@ public static class ProtectionCapabilities
 
         foreach (var rule in settings.Rules)
         {
+            if (!Enum.IsDefined(rule.Scope))
+                throw new ArgumentException($"Protection rule has invalid scope {(int)rule.Scope}.");
             if (string.IsNullOrWhiteSpace(rule.Match) && rule.Scope != ProtectionRuleScope.Rva)
                 throw new ArgumentException("Protection rules require a non-empty Match value.");
             if (rule.Scope == ProtectionRuleScope.Rva
                 && (rule.StartRva is null || rule.EndRva is null || rule.EndRva <= rule.StartRva))
             {
                 throw new ArgumentException("RVA protection rules require StartRva < EndRva.");
+            }
+            if (rule.Scope != ProtectionRuleScope.Rva && (rule.StartRva is not null || rule.EndRva is not null))
+            {
+                throw new ArgumentException("StartRva and EndRva may only be set on RVA protection rules.");
             }
             if (rule.Preset is not null
                 && !string.Equals(rule.Preset, "off", StringComparison.OrdinalIgnoreCase)

@@ -8,23 +8,29 @@ namespace Rampart.Managed;
 // who can replace both the helper and its data. No dynamic code is generated.
 internal static class RuntimeHardenedTemplate
 {
-    internal static string Decode(string resource, int offset, int length, string key, ref string? cached)
+    internal static string Decode(string resource, int offset, int length, byte[] key, bool intern, ref string? cached)
     {
         var existing = cached;
-        if (existing is not null) return existing;
-        if (offset < 0 || length < 64 || (length - 48) % 16 != 0)
-            throw new InvalidDataException("The protected payload is invalid.");
-        var material = Convert.FromBase64String(key);
-        if (material.Length != 64) throw new InvalidDataException("The protected payload key is invalid.");
-        var encryptionKey = new byte[32]; var authenticationKey = new byte[32];
-        Array.Copy(material, 0, encryptionKey, 0, 32);
-        Array.Copy(material, 32, authenticationKey, 0, 32);
-        Array.Clear(material, 0, material.Length);
+        if (existing is not null)
+        {
+            if (key is not null) Array.Clear(key, 0, key.Length);
+            return existing;
+        }
+        byte[]? encryptionKey = null;
+        byte[]? authenticationKey = null;
         byte[]? plaintext = null;
         try
         {
+            if (offset < 0 || length < 64 || (length - 48) % 16 != 0)
+                throw new InvalidDataException("The protected payload is invalid.");
+            if (key is null || key.Length != 64)
+                throw new InvalidDataException("The protected payload key is invalid.");
+            encryptionKey = new byte[32]; authenticationKey = new byte[32];
+            Array.Copy(key, 0, encryptionKey, 0, 32);
+            Array.Copy(key, 32, authenticationKey, 0, 32);
+            Array.Clear(key, 0, key.Length);
             var bytes = new byte[length];
-            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)
+            using (var stream = typeof(RuntimeHardenedTemplate).Assembly.GetManifestResourceStream(resource)
                 ?? throw new InvalidDataException("The protected payload is missing."))
             {
                 if (offset > stream.Length - length) throw new InvalidDataException("The protected payload is truncated.");
@@ -56,18 +62,19 @@ internal static class RuntimeHardenedTemplate
             if (plaintext.Length % 2 != 0) throw new InvalidDataException("The protected payload is invalid.");
             var characters = new char[plaintext.Length / 2];
             for (var i = 0; i < characters.Length; i++) characters[i] = (char)(plaintext[i * 2] | plaintext[i * 2 + 1] << 8);
-            // Preserve ldstr's interning, including empty strings and unpaired
-            // surrogates. Both strings and decoded VM programs remain recoverable
-            // in the process while in use; caching avoids decrypting on each call.
-            existing = string.Intern(new string(characters));
+            // Preserve ldstr interning for user strings while keeping decoded VM
+            // programs out of the process-wide string intern pool.
+            var decoded = new string(characters);
             Array.Clear(characters, 0, characters.Length);
+            existing = intern ? string.Intern(decoded) : decoded;
             cached = existing;
             return existing;
         }
         finally
         {
-            Array.Clear(encryptionKey, 0, encryptionKey.Length);
-            Array.Clear(authenticationKey, 0, authenticationKey.Length);
+            if (key is not null) Array.Clear(key, 0, key.Length);
+            if (encryptionKey is not null) Array.Clear(encryptionKey, 0, encryptionKey.Length);
+            if (authenticationKey is not null) Array.Clear(authenticationKey, 0, authenticationKey.Length);
             if (plaintext is not null) Array.Clear(plaintext, 0, plaintext.Length);
         }
     }

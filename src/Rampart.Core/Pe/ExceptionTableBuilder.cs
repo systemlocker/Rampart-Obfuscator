@@ -10,6 +10,12 @@ public static class ExceptionTableBuilder
     {
         if (end <= begin || unwind.Length < 4 || (unwind.Length & 3) != 0)
             throw new ArgumentException("Invalid generated runtime-function range or unwind record.");
+        byte version = (byte)(unwind[0] & 0x07);
+        if (version is not (1 or 2))
+            throw new ArgumentException($"Unsupported UNWIND_INFO version {version}.", nameof(unwind));
+        int minLength = 4 + ((unwind[2] + 1) & ~1) * 2;
+        if (unwind.Length < minLength)
+            throw new ArgumentException("UNWIND_INFO buffer is shorter than its declared CountOfCodes.", nameof(unwind));
         var directory = ctx.Pe.Directory(DataDir.Exception);
         if (!directory.IsEmpty && directory.Size % 12 != 0)
             throw new BadImageFormatException("Exception directory has an incomplete runtime-function entry.");
@@ -20,7 +26,7 @@ public static class ExceptionTableBuilder
         ctx.WriteData(unwindRva, unwind);
         records.Add(new(begin, end, unwindRva));
         records.Sort((a, b) => a.BeginRva.CompareTo(b.BeginRva));
-        byte[] table = new byte[records.Count * 12];
+        byte[] table = new byte[checked(records.Count * 12)];
         for (int index = 0; index < records.Count; index++)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(table.AsSpan(index * 12), records[index].BeginRva);
@@ -29,6 +35,6 @@ public static class ExceptionTableBuilder
         }
         uint tableRva = ctx.AllocData(table.Length, 4);
         ctx.WriteData(tableRva, table);
-        ctx.Pe.SetDirectory(DataDir.Exception, tableRva, (uint)table.Length);
+        ctx.Pe.SetDirectory(DataDir.Exception, tableRva, checked((uint)table.Length));
     }
 }

@@ -52,12 +52,17 @@ public static class ImportTable
                 uint thunkRva = checked(firstThunk + (uint)index * stride);
                 if ((entry & (pe.IsPe32Plus ? 0x8000000000000000UL : 0x80000000UL)) != 0)
                 {
+                    ulong reservedMask = pe.IsPe32Plus ? 0x7FFF_FFFF_FFFF_0000UL : 0x7FFF_0000UL;
+                    if ((entry & reservedMask) != 0)
+                        throw new BadImageFormatException($"Ordinal import entry for '{dll}' has non-zero reserved bits.");
                     uint ordinal = (uint)(entry & 0xFFFF);
                     result.Add(new ImportedFunction(dll, $"#{ordinal}", ordinal, thunkRva));
                 }
                 else
                 {
-                    uint hintNameRva = checked((uint)entry);
+                    if (entry > uint.MaxValue - 2)
+                        throw new BadImageFormatException($"Import hint/name RVA for '{dll}' is out of range.");
+                    uint hintNameRva = (uint)entry;
                     uint hint = BinaryPrimitives.ReadUInt16LittleEndian(pe.ReadRva(hintNameRva, 2));
                     // Import names may legally end at the last raw byte of a
                     // section. Reading a speculative 256-byte block crosses

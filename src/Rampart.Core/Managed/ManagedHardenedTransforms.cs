@@ -14,13 +14,14 @@ internal static class ManagedHardenedTransforms
         foreach (var instruction in method.Body.Instructions.ToArray())
         {
             if (instruction.OpCode.Code != Code.Ldstr || !eligible(instruction)) continue;
-            ReplaceLiteral(method, instruction, decoder, payload, resource, seed, identity, count++);
+            ReplaceLiteral(method, instruction, decoder, payload, resource, seed, identity, count++, intern: true);
         }
+        if (count > 0) ManagedIlVerifier.UpdateMaxStackSize(method);
         return count;
     }
 
     private static void ReplaceLiteral(MethodDefinition method, Instruction literal, MethodDefinition decoder,
-        MemoryStream payload, string resource, long seed, string identity, int site)
+        MemoryStream payload, string resource, long seed, string identity, int site, bool intern)
     {
         string value = (string)literal.Operand;
         var plaintext = new byte[checked(value.Length * 2)];
@@ -55,8 +56,12 @@ internal static class ManagedHardenedTransforms
         // nothing and performs no cryptographic work on the hot path.
         il.Emit(OpCodes.Ldsfld, cache); il.Emit(OpCodes.Dup); il.Emit(OpCodes.Brtrue, done); il.Emit(OpCodes.Pop);
         il.Emit(OpCodes.Ldstr, resource); il.Emit(OpCodes.Ldc_I4, offset); il.Emit(OpCodes.Ldc_I4, record.Length);
-        il.Emit(OpCodes.Ldc_I4, salt); il.Emit(OpCodes.Call, keyMethod); il.Emit(OpCodes.Ldsflda, cache); il.Emit(OpCodes.Call, decoder);
-        il.Append(done); decoder.DeclaringType.Methods.Add(reader);
+        il.Emit(OpCodes.Ldc_I4, salt); il.Emit(OpCodes.Call, keyMethod);
+        il.Emit(intern ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+        il.Emit(OpCodes.Ldsflda, cache); il.Emit(OpCodes.Call, decoder);
+        il.Append(done);
+        ManagedIlVerifier.UpdateMaxStackSize(reader);
+        decoder.DeclaringType.Methods.Add(reader);
         literal.OpCode = OpCodes.Call; literal.Operand = reader;
         CryptographicOperations.ZeroMemory(keySeed);
         CryptographicOperations.ZeroMemory(material);
@@ -66,21 +71,19 @@ internal static class ManagedHardenedTransforms
         string identity, int site, int offset, out int salt)
     {
         var module = decoder.Module; var types = module.TypeSystem;
-        var result = new MethodDefinition("k_" + offset, MethodAttributes.Assembly | MethodAttributes.Static | MethodAttributes.HideBySig, types.String)
+        var byteArray = new ArrayType(types.Byte);
+        var result = new MethodDefinition("k_" + offset, MethodAttributes.Assembly | MethodAttributes.Static | MethodAttributes.HideBySig, byteArray)
         { ImplAttributes = MethodImplAttributes.NoInlining };
         result.Parameters.Add(new ParameterDefinition(types.Int32));
         var calls = decoder.Body.Instructions.Select(instruction => instruction.Operand).OfType<MethodReference>().ToArray();
         var cryptoScope = calls.First(call => call.DeclaringType.FullName == "System.Security.Cryptography.Aes").DeclaringType.Scope;
-        var hash = new MethodReference("HashData", new ArrayType(types.Byte), new TypeReference("System.Security.Cryptography", "SHA512", module, cryptoScope));
-        hash.Parameters.Add(new ParameterDefinition(new ArrayType(types.Byte)));
-        var convert = new MethodReference("ToBase64String", types.String, calls.First(call => call.DeclaringType.FullName == "System.Convert").DeclaringType);
-        convert.Parameters.Add(new ParameterDefinition(new ArrayType(types.Byte)));
+        var hash = new MethodReference("HashData", byteArray, new TypeReference("System.Security.Cryptography", "SHA512", module, cryptoScope));
+        hash.Parameters.Add(new ParameterDefinition(byteArray));
         salt = ManagedTransforms.Key(seed, identity + "|key", site);
         var il = result.Body.GetILProcessor(); il.Emit(OpCodes.Ldc_I4, seedBytes.Length); il.Emit(OpCodes.Newarr, types.Byte);
         // The seed is materialized from scattered immediates and a caller-supplied
-        // salt in a non-inlined method. The full AES/MAC key is never an ldstr or
-        // static array initializer. This raises extraction work, not secrecy:
-        // an analyst can still evaluate this routine in the native application.
+        // salt in a non-inlined method. Returning byte[] directly avoids pinning
+        // key material in an immutable Base64 string on the managed heap.
         foreach (int index in Enumerable.Range(0, seedBytes.Length).OrderBy(index => ManagedTransforms.Key(seed, identity, site + index + 100)))
         {
             int mask = unchecked(salt + index * 83) & 255;
@@ -88,7 +91,8 @@ internal static class ManagedHardenedTransforms
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldc_I4, index * 83); il.Emit(OpCodes.Add); il.Emit(OpCodes.Conv_U1);
             il.Emit(OpCodes.Xor); il.Emit(OpCodes.Conv_U1); il.Emit(OpCodes.Stelem_I1);
         }
-        il.Emit(OpCodes.Call, hash); il.Emit(OpCodes.Call, convert); il.Emit(OpCodes.Ret);
+        il.Emit(OpCodes.Call, hash); il.Emit(OpCodes.Ret);
+        ManagedIlVerifier.UpdateMaxStackSize(result);
         decoder.DeclaringType.Methods.Add(result);
         return result;
     }
@@ -99,7 +103,9 @@ internal static class ManagedHardenedTransforms
         if (!ManagedIntegerProgram.TryLift(method, out var program)) return false;
         int key = (ManagedTransforms.Key(seed, identity, 0) & 65535) | 1;
         char[] encoded = program!.Encode(method.Body.Variables.Count, key).ToCharArray();
-        var helper = Clone(interpreter, "v_" + identity[..16]);
+        var baseName = "v_" + identity[..16];
+        var counter = interpreter.DeclaringType.Methods.Count(m => m.Name.StartsWith(baseName + "_", StringComparison.Ordinal));
+        var helper = Clone(interpreter, baseName + "_" + counter);
         // Each selected method has its own opcode assignment. The original
         // logical switch is permuted together with the program; branch and
         // switch destinations remain exact UTF-16 program offsets.
@@ -118,7 +124,7 @@ internal static class ManagedHardenedTransforms
         method.DebugInformation.SequencePoints.Clear(); method.DebugInformation.Scope = null;
         var il = method.Body.GetILProcessor();
         var literal = Instruction.Create(OpCodes.Ldstr, new string(encoded)); il.Append(literal);
-        ReplaceLiteral(method, literal, decoder, payload, resource, seed, identity + "|vm", 0);
+        ReplaceLiteral(method, literal, decoder, payload, resource, seed, identity + "|vm", 0, intern: false);
         il.Emit(OpCodes.Ldc_I4, key);
         for (int index = 0; index < 8; index++)
         {
@@ -133,6 +139,7 @@ internal static class ManagedHardenedTransforms
             { il.Emit(OpCodes.Dup); il.Emit(OpCodes.Ldc_I4, parameter.Index); il.Emit(OpCodes.Ldarg, parameter); il.Emit(OpCodes.Stelem_I4); }
         }
         il.Emit(OpCodes.Call, helper); il.Emit(OpCodes.Ret);
+        ManagedIlVerifier.UpdateMaxStackSize(method);
         return true;
     }
 

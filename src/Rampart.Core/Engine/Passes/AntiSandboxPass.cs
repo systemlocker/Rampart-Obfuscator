@@ -54,24 +54,40 @@ public sealed class AntiSandboxPass
         RuntimeDetectionStateLayout detectionState = RuntimeDetectionState.Ensure(ctx);
         uint stateRva = ctx.AllocData(40, 8);
 
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.Rbx).PushR(Reg.R15);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.Rbx); pushes.Add((Reg.Rbx, (byte)a.Position));
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva).AddRi(Reg.R15, checked((int)detectionState.Rva));
 
-            a.Mov32Ri(Reg.Rax, 1).Cpuid();
-            a.MovRr(Reg.R8, Reg.Rcx).AndRi(Reg.R8, unchecked((int)0x80000000));
+            a.Mov32Ri(Reg.Rax, 1).XorRr(Reg.Rcx, Reg.Rcx).Cpuid();
+            a.Mov32Rr(Reg.R8, Reg.Rcx).AndRi(Reg.R8, unchecked((int)0x80000000));
             a.MovRipStore(Reg.R8, "vm_state", 0);
-            a.TestRr(Reg.R8, Reg.R8).Jcc(Cc.E, "vm_done");
+            a.Test32Rr(Reg.R8, Reg.R8).Jcc(Cc.E, "vm_done");
 
             // Hypervisor-present is independently meaningful; leaf 0x40000000
             // supplies the vendor triplet used to cross-check that claim.
-            a.Mov32Ri(Reg.Rax, 0x40000000).Cpuid();
+            a.Mov32Ri(Reg.Rax, 0x40000000).XorRr(Reg.Rcx, Reg.Rcx).Cpuid();
             a.MovRipStore(Reg.Rax, "vm_state", 8);
             a.MovRipStore(Reg.Rbx, "vm_state", 16);
             a.MovRipStore(Reg.Rcx, "vm_state", 24);
             a.MovRipStore(Reg.Rdx, "vm_state", 32);
+
+            // Bare-metal Windows hosts with VBS/Hyper-V/Core Isolation enabled
+            // set CPUID.1.ECX[31] and report vendor "Microsoft Hv" with root-
+            // partition privilege (leaf 0x40000003 EBX bit 0 = CreatePartitions).
+            // Exclude the host root partition so bare-metal Win11 does not false-positive.
+            a.Mov32Ri(Reg.R8, 0x40000003).Cmp32Rr(Reg.Rax, Reg.R8).Jcc(Cc.B, "vm_detected");
+            a.Mov32Ri(Reg.R8, 0x7263694D).Cmp32Rr(Reg.Rbx, Reg.R8).Jcc(Cc.Ne, "vm_detected"); // "Micr"
+            a.Mov32Ri(Reg.R8, 0x666F736F).Cmp32Rr(Reg.Rcx, Reg.R8).Jcc(Cc.Ne, "vm_detected"); // "osof"
+            a.Mov32Ri(Reg.R8, 0x76482074).Cmp32Rr(Reg.Rdx, Reg.R8).Jcc(Cc.Ne, "vm_detected"); // "t Hv"
+            a.Mov32Ri(Reg.Rax, 0x40000003).XorRr(Reg.Rcx, Reg.Rcx).Cpuid();
+            a.TestRi8(Reg.Rbx, 1).Jcc(Cc.Ne, "vm_done");
+
+            a.Label("vm_detected");
             RuntimeDetectionState.EmitRecord(
                 a,
                 Reg.R15,
@@ -81,9 +97,10 @@ public sealed class AntiSandboxPass
                 labelPrefix: "cpuid_vm");
 
             a.Label("vm_done").PopR(Reg.R15).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
             a.Align(8).Label("vm_state").Dq(0, 0, 0, 0, 0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ASBX.CPUID\0"));
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0, prologEnd));
         }
 
         uint rva = AntiDebugPass.WriteRoutine(ctx, Build, iat,
@@ -100,11 +117,14 @@ public sealed class AntiSandboxPass
         string[] modules = ["SbieDll.dll", "cuckoomon.dll", "monitor-x64.dll"];
         string[] environmentVariables = ["CUCKOO_ANALYSIS", "SANDBOXIE"];
 
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
             // Shadow space plus a 64-wide-character environment-value buffer.
-            a.PushR(Reg.R15).SubRi(Reg.Rsp, 0xA0);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0xA0);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva).AddRi(Reg.R15, checked((int)detectionState.Rva));
 
             for (int i = 0; i < modules.Length; i++)
@@ -120,7 +140,7 @@ public sealed class AntiSandboxPass
                 a.LeaRip(Reg.Rcx, $"environment_{i}");
                 a.LeaRd(Reg.Rdx, Reg.Rsp, 0x20);
                 a.MovRi(Reg.R8, 64).CallRip("ext::GetEnvironmentVariableW");
-                a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, $"environment_next_{i}");
+                a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, $"environment_next_{i}");
                 a.MovRi(Reg.Rax, modules.Length + i + 1).MovRipStore(Reg.Rax, "fingerprint_state", 0);
                 a.Jmp("fingerprint_seen").Label($"environment_next_{i}");
             }
@@ -135,6 +155,7 @@ public sealed class AntiSandboxPass
                 taintConstant: 0,
                 labelPrefix: "sandbox_fingerprint");
             a.Label("fingerprint_done").AddRi(Reg.Rsp, 0xA0).PopR(Reg.R15).Ret();
+            int codeEnd = a.Position;
 
             a.Align(8).Label("fingerprint_state").Dq(0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ASBX.FINGERPRINT\0"));
@@ -143,7 +164,7 @@ public sealed class AntiSandboxPass
             for (int i = 0; i < environmentVariables.Length; i++)
                 a.Align(2).Label($"environment_{i}").Db(Encoding.Unicode.GetBytes(environmentVariables[i] + "\0"));
             AntiDebugPass.AddExternalSlots(a, "GetModuleHandleW", "GetEnvironmentVariableW");
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0xA0, prologEnd));
         }
 
         uint rva = AntiDebugPass.WriteRoutine(ctx, Build, iat,
@@ -159,26 +180,30 @@ public sealed class AntiSandboxPass
         uint stateRva = ctx.AllocData(32, 8);
         ctx.WriteData(stateRva + 24, BitConverter.GetBytes((ulong)GenerousIdleWindowMilliseconds));
 
-        Asm Build(uint selfRva)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.R15).SubRi(Reg.Rsp, 0x30);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0x30);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva).AddRi(Reg.R15, checked((int)detectionState.Rva));
 
             // LASTINPUTINFO { cbSize = 8, dwTime = 0 } in local storage.
             a.Mov32Ri(Reg.Rax, 8).MovMr32(Reg.Rsp, Reg.Rax, 0x20);
             a.XorRr(Reg.Rax, Reg.Rax).MovMr32(Reg.Rsp, Reg.Rax, 0x24);
             a.LeaRd(Reg.Rcx, Reg.Rsp, 0x20).CallRip("ext::GetLastInputInfo");
+            a.Mov32Rr(Reg.Rax, Reg.Rax);
             a.MovRipStore(Reg.Rax, "human_state", 0);
             // API failure supplies no evidence and must not become a detection.
-            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "human_done");
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "human_done");
 
             a.CallRip("ext::GetTickCount64");
             a.MovRipStore(Reg.Rax, "human_state", 8);
-            // LASTINPUTINFO::dwTime is a wrapping DWORD. Truncate the current
-            // tick count before unsigned subtraction so wrap-around is correct.
-            a.Db(0x89, 0xC0); // mov eax,eax (zero-extend low tick DWORD)
-            a.MovRm32(Reg.Rdx, Reg.Rsp, 0x24).SubRr(Reg.Rax, Reg.Rdx);
+            // LASTINPUTINFO::dwTime is a wrapping 32-bit tick count (49.7-day epoch).
+            // Perform 32-bit subtraction (sub eax, edx) so wrap-around produces the
+            // exact unsigned 32-bit elapsed milliseconds zero-extended into RAX.
+            a.MovRm32(Reg.Rdx, Reg.Rsp, 0x24).Sub32Rr(Reg.Rax, Reg.Rdx);
             a.MovRipStore(Reg.Rax, "human_state", 16);
             a.MovRi(Reg.Rdx, GenerousIdleWindowMilliseconds).CmpRr(Reg.Rax, Reg.Rdx);
             a.Jcc(Cc.Be, "human_done");
@@ -191,10 +216,11 @@ public sealed class AntiSandboxPass
                 labelPrefix: "human_idle");
 
             a.Label("human_done").AddRi(Reg.Rsp, 0x30).PopR(Reg.R15).Ret();
+            int codeEnd = a.Position;
             a.Align(8).Label("human_state").Dq(0, 0, 0, (ulong)GenerousIdleWindowMilliseconds);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ASBX.HUMAN\0"));
             AntiDebugPass.AddExternalSlots(a, "GetLastInputInfo", "GetTickCount64");
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x30, prologEnd));
         }
 
         uint rva = AntiDebugPass.WriteRoutine(ctx, Build, iat,

@@ -59,6 +59,11 @@ public sealed class BuildContext
     /// DIR64 relocation entries in the rebuilt table.</summary>
     public List<uint> RelocSlots { get; } = [];
 
+    /// <summary>Private .rmpd IAT slots populated by ImportConcealmentPass, mapped
+    /// to the original imported function metadata so ApiConcealmentPass can also
+    /// wrap concealed sensitive call sites.</summary>
+    internal Dictionary<uint, ImportedFunction> ConcealedImportSlots { get; } = [];
+
     public BuildContext(
         PeImage pe,
         ProtectionSettings settings,
@@ -184,13 +189,17 @@ public sealed class BuildContext
     /// <summary>Bump-allocates in the stub section and returns the RVA.</summary>
     public uint Alloc(int size, int alignment = 1)
     {
+        if (size < 0)
+            throw new ArgumentOutOfRangeException(nameof(size), "Allocation size cannot be negative.");
+        if (alignment <= 0)
+            throw new ArgumentOutOfRangeException(nameof(alignment), "Allocation alignment must be positive.");
         var stub = EnsureStubSection();
         while (_stubUsed % alignment != 0)
             _stubUsed++;
         int off = _stubUsed;
-        _stubUsed += size;
+        _stubUsed = checked(_stubUsed + size);
         EnsureStubCapacity(stub, _stubUsed);
-        return StubRva + (uint)off;
+        return checked(StubRva + (uint)off);
     }
 
     private void EnsureStubCapacity(PeImage.Section stub, int required)
@@ -199,22 +208,37 @@ public sealed class BuildContext
             return;
 
         uint fileAlignment = Pe.FileAlignment;
-        if (Data != null && required > stub.VirtualSize)
+        uint? nextSectionVa = NextVirtualAddressAfter(stub);
+        uint maxVirtual = nextSectionVa is uint nextVa
+            ? checked(nextVa - stub.VirtualAddress)
+            : Data != null ? stub.VirtualSize : uint.MaxValue;
+        if ((uint)required > maxVirtual)
             throw new InvalidOperationException(
-                $"Protector stubs exceed the {stub.VirtualSize}-byte RX reservation.");
-        int doubled = checked(stub.Data.Length * 2);
-        uint newSize = PeImage.AlignUp((uint)Math.Max(required, doubled), fileAlignment);
-        uint growth = newSize - stub.SizeOfRawData;
-        foreach (PeImage.Section later in Pe.Sections.Where(section =>
-                     section != stub && section.PointerToRawData > stub.PointerToRawData))
-            later.PointerToRawData = checked(later.PointerToRawData + growth);
+                $"Protector stubs exceed the {maxVirtual}-byte RX virtual reservation.");
+
+        int doubled = stub.Data.Length <= int.MaxValue / 2 ? stub.Data.Length * 2 : int.MaxValue;
+        uint requested = PeImage.AlignUp((uint)Math.Max(required, doubled), fileAlignment);
+        // When another section follows in virtual memory (e.g. .rmpd), clamp
+        // geometric doubling so raw/virtual size never crosses the reservation.
+        uint newSize = requested > maxVirtual
+            ? PeImage.AlignUp((uint)required, fileAlignment)
+            : requested;
+        if (newSize > maxVirtual)
+            throw new InvalidOperationException(
+                $"Aligned protector stubs ({newSize} bytes) exceed the {maxVirtual}-byte RX reservation.");
+
+        uint oldRawEnd = checked(stub.PointerToRawData + stub.SizeOfRawData);
+        uint growth = checked(newSize - stub.SizeOfRawData);
+        ShiftRawOffsetsAfter(stub, oldRawEnd, growth);
         Array.Resize(ref stub.Data, checked((int)newSize));
-        if (Data is null)
-        {
+        if (Data is null && nextSectionVa is null)
             stub.VirtualSize = newSize;
-            Pe.SizeOfImage = PeImage.AlignUp(stub.VirtualAddress + newSize, Pe.SectionAlignment);
-        }
+        else
+            stub.VirtualSize = Math.Max(stub.VirtualSize, newSize);
         stub.SizeOfRawData = newSize;
+        Pe.SizeOfImage = Math.Max(
+            Pe.SizeOfImage,
+            PeImage.AlignUp(checked(stub.VirtualAddress + Math.Max(stub.VirtualSize, newSize)), Pe.SectionAlignment));
         Log.Add(new("stub-section", $"grew .rmpt capacity to {newSize} bytes"));
     }
 
@@ -228,13 +252,17 @@ public sealed class BuildContext
     /// <summary>Bump-allocates in the non-executable data section.</summary>
     public uint AllocData(int size, int alignment = 1)
     {
+        if (size < 0)
+            throw new ArgumentOutOfRangeException(nameof(size), "Allocation size cannot be negative.");
+        if (alignment <= 0)
+            throw new ArgumentOutOfRangeException(nameof(alignment), "Allocation alignment must be positive.");
         PeImage.Section data = EnsureDataSection();
         while (_dataUsed % alignment != 0)
             _dataUsed++;
         int off = _dataUsed;
-        _dataUsed += size;
+        _dataUsed = checked(_dataUsed + size);
         EnsureDataCapacity(data, _dataUsed);
-        return DataRva + (uint)off;
+        return checked(DataRva + (uint)off);
     }
 
     private void EnsureDataCapacity(PeImage.Section data, int required)
@@ -242,13 +270,63 @@ public sealed class BuildContext
         if (required <= data.Data.Length)
             return;
 
-        int doubled = checked(data.Data.Length * 2);
-        uint newSize = PeImage.AlignUp((uint)Math.Max(required, doubled), Pe.FileAlignment);
+        uint? nextSectionVa = NextVirtualAddressAfter(data);
+        uint maxVirtual = nextSectionVa is uint nextVa
+            ? checked(nextVa - data.VirtualAddress)
+            : uint.MaxValue;
+        if ((uint)required > maxVirtual)
+            throw new InvalidOperationException(
+                $"Protector data section exceeds the {maxVirtual}-byte virtual reservation.");
+
+        int doubled = data.Data.Length <= int.MaxValue / 2 ? data.Data.Length * 2 : int.MaxValue;
+        uint requested = PeImage.AlignUp((uint)Math.Max(required, doubled), Pe.FileAlignment);
+        uint newSize = requested > maxVirtual
+            ? PeImage.AlignUp((uint)required, Pe.FileAlignment)
+            : requested;
+        if (newSize > maxVirtual)
+            throw new InvalidOperationException(
+                $"Aligned protector data ({newSize} bytes) exceeds the {maxVirtual}-byte virtual reservation.");
+
+        uint oldRawEnd = checked(data.PointerToRawData + data.SizeOfRawData);
+        uint growth = checked(newSize - data.SizeOfRawData);
+        ShiftRawOffsetsAfter(data, oldRawEnd, growth);
         Array.Resize(ref data.Data, checked((int)newSize));
-        data.VirtualSize = newSize;
+        data.VirtualSize = Math.Max(data.VirtualSize, newSize);
         data.SizeOfRawData = newSize;
-        Pe.SizeOfImage = PeImage.AlignUp(data.VirtualAddress + newSize, Pe.SectionAlignment);
+        Pe.SizeOfImage = Math.Max(
+            Pe.SizeOfImage,
+            PeImage.AlignUp(checked(data.VirtualAddress + Math.Max(data.VirtualSize, newSize)), Pe.SectionAlignment));
         Log.Add(new("data-section", $"grew .rmpd capacity to {newSize} bytes"));
+    }
+
+    private uint? NextVirtualAddressAfter(PeImage.Section section)
+    {
+        uint? next = null;
+        foreach (PeImage.Section candidate in Pe.Sections)
+        {
+            if (candidate == section || candidate.VirtualAddress <= section.VirtualAddress)
+                continue;
+            if (next is null || candidate.VirtualAddress < next.Value)
+                next = candidate.VirtualAddress;
+        }
+        return next;
+    }
+
+    private void ShiftRawOffsetsAfter(PeImage.Section grown, uint insertOffset, uint growth)
+    {
+        if (growth == 0)
+            return;
+        foreach (PeImage.Section later in Pe.Sections)
+        {
+            if (later != grown && later.SizeOfRawData > 0 && later.PointerToRawData >= insertOffset)
+                later.PointerToRawData = checked(later.PointerToRawData + growth);
+        }
+        // Keep raw file pointers inside IMAGE_DEBUG_DIRECTORY and Security synchronized
+        // whenever section growth shifts subsequent sections or the trailing overlay.
+        Pe.AdjustDebugRawPointers(insertOffset, growth);
+        DataDirectory security = Pe.Directory(DataDir.Security);
+        if (!security.IsEmpty && security.RelativeVirtualAddress >= insertOffset)
+            Pe.SetDirectory(DataDir.Security, checked(security.RelativeVirtualAddress + growth), security.Size);
     }
 
     public void WriteData(uint rva, ReadOnlySpan<byte> data)

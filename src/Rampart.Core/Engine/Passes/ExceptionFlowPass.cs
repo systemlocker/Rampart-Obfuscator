@@ -64,9 +64,9 @@ public sealed class ExceptionFlowPass
         var init = new Asm();
         init.SubRi(Reg.Rsp, 40);
         int prologueSize = init.Position;
-        init.Mov32Ri(Reg.Rcx, 0).LeaRip(Reg.Rdx, "handler");
-        // Register last so application handlers retain their existing order.
-        // The executable and its handler stay loaded for the process lifetime.
+        // Register first (First = 1) so Rampart's exact-site UD2 dispatcher runs
+        // before any process-wide catch-all vectored exception handler.
+        init.Mov32Ri(Reg.Rcx, 1).LeaRip(Reg.Rdx, "handler");
         init.CallRip("register").MovRipStore(Reg.Rax, "active").AddRi(Reg.Rsp, 40).Ret();
         int codeSize = init.Position;
         init.Label("handler").Dq(0).Label("register").Dq(0).Label("active").Dq(0);

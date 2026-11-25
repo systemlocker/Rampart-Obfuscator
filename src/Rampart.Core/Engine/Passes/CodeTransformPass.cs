@@ -26,8 +26,8 @@ public sealed class CodeTransformPass
         if (ctx.MaximumFunctionLevel("code-transformation.per-build-mutation") != Config.ProtectionLevel.Off)
             ctx.Log.Add(new("mutation", $"build seed {ctx.Settings.Seed:X16} drives decoy streams, keys, and stub layout"));
 
-        if (ctx.MaximumFunctionLevel("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
-            ctx.Log.Add(new("mba", "runtime-stub constants use per-build XOR-split identities"));
+        if (ctx.Applied.ContainsKey("code-transformation.mba-constants"))
+            ctx.Log.Add(new("mba", "runtime-stub and selected native constants use per-build split identities"));
     }
 
     private static void TransformNativeBodies(BuildContext ctx)
@@ -100,14 +100,6 @@ public sealed class CodeTransformPass
     private static int FillPaddingWithDecoys(BuildContext ctx, Config.ProtectionLevel level)
     {
         var pe = ctx.Pe;
-        int density = level switch
-        {
-            Config.ProtectionLevel.Light => 2,
-            Config.ProtectionLevel.Balanced => 4,
-            Config.ProtectionLevel.Heavy => 8,
-            _ => 16,
-        };
-
         int filled = 0, bytesFilled = 0;
         var ordered = ctx.Functions.OrderBy(f => f.BeginRva).ToList();
         foreach (var textSec in pe.Sections.Where(s => s.IsExecutable))
@@ -120,25 +112,27 @@ public sealed class CodeTransformPass
                     ctx.LevelFor("code-transformation.junk-insertion", cur);
                 if (effectiveLevel == Config.ProtectionLevel.Off)
                     continue;
+                if (!textSec.ContainsRva(cur.EndRva) || !textSec.ContainsRva(next.BeginRva))
+                    continue;
                 if (!pe.TryRvaToOffset(cur.EndRva, out int gapStartOff))
                     continue;
                 if (next.BeginRva <= cur.EndRva)
                     continue;
-                int gapLen = (int)(next.BeginRva - cur.EndRva);
-                if (gapLen < density || gapLen > 64)
+                int gapLen = checked((int)(next.BeginRva - cur.EndRva));
+                if (gapLen < 2 || gapLen > 64)
                     continue;
 
                 int idx = gapStartOff - (int)textSec.PointerToRawData;
                 if (idx < 0 || idx + gapLen > textSec.Data.Length)
                     continue;
 
-                // Only touch verified padding (CC/90/00) — if the linker put
-                // anything live here, leave it alone.
+                // Only touch verified linker code padding (INT3 0xCC or NOP 0x90).
+                // Zero bytes (0x00) may belong to read-only tables or alignment data.
                 bool isPadding = true;
                 for (int b = 0; b < gapLen; b++)
                 {
                     byte v = textSec.Data[idx + b];
-                    if (v is not (0xCC or 0x90 or 0x00))
+                    if (v is not (0xCC or 0x90))
                     {
                         isPadding = false;
                         break;
@@ -165,30 +159,35 @@ public sealed class CodeTransformPass
     }
 
     /// <summary>Generates a valid, never-executed instruction stream into the
-    /// gap: flag-preserving computations on dead registers, fake prologues,
-    /// short jumps that stay inside the gap. Every byte derives from the build
-    /// RNG — the same seed reproduces the selected layout.</summary>
+    /// gap: flag-preserving computations on dead registers, fake prologues, and
+    /// constant loads. Higher density emits a higher fraction of real decoy ops
+    /// vs single-byte NOPs. Every byte derives from the build RNG.</summary>
     private static void EmitDecoyStream(Span<byte> gap, Random rng, int density)
     {
         // These fragments stay in verified inter-function padding. Native body
         // junk uses a separate emitter with the stricter executed-code contract.
+        // Probability of emitting a multi-byte decoy scales up with density
+        // (Light=2 -> 50%, Balanced=4 -> 67%, Heavy=8 -> 80%, Maximum=16 -> 89%).
         int pos = 0;
         while (pos < gap.Length)
         {
             int room = gap.Length - pos;
-            int pick = rng.Next(0, Math.Max(2, density + 2));
-            switch (pick)
+            bool emitDecoy = rng.Next(0, density + 2) < density;
+            if (!emitDecoy || room < 2)
+            {
+                gap[pos++] = 0x90;
+                continue;
+            }
+
+            switch (rng.Next(0, 3))
             {
                 case 0: // push r; pop r — valid 2-byte no-op pair
-                    if (room >= 2)
                     {
                         byte r = (byte)rng.Next(0, 8);
                         gap[pos++] = (byte)(0x50 + r);
                         gap[pos++] = (byte)(0x58 + r);
+                        break;
                     }
-                    else
-                        gap[pos++] = 0x90;
-                    break;
                 case 1: // fake prologue: push rbp; mov rbp,rsp (4 bytes)
                     if (room >= 4)
                     {
@@ -198,9 +197,13 @@ public sealed class CodeTransformPass
                         gap[pos++] = 0xE5;
                     }
                     else
-                        gap[pos++] = 0x90;
+                    {
+                        byte r = (byte)rng.Next(0, 8);
+                        gap[pos++] = (byte)(0x50 + r);
+                        gap[pos++] = (byte)(0x58 + r);
+                    }
                     break;
-                case 2: // mov r32, imm32 — a plausible constant load
+                default: // mov r32, imm32 — a plausible constant load (5 bytes)
                     if (room >= 5)
                     {
                         gap[pos++] = (byte)(0xB8 + rng.Next(0, 8));
@@ -208,11 +211,9 @@ public sealed class CodeTransformPass
                             gap[pos++] = (byte)rng.Next(0, 0x100);
                     }
                     else
+                    {
                         gap[pos++] = 0x90;
-                    break;
-                default: // nop sled fragment or single-byte dead ops
-                    gap[pos++] = pick % 3 == 0 ? (byte)0x90 : (byte)0x87; // xchg r,r-ish safe byte? keep 0x90 only
-                    gap[pos - 1] = 0x90;
+                    }
                     break;
             }
         }

@@ -13,7 +13,7 @@ namespace Rampart.Engine.Passes;
 public sealed class IdaBombPass
 {
     internal const int LightFunctionCount = 256;
-    internal const int FunctionSize = 32;
+    internal const int FunctionSize = 48;
     internal const string SectionName = ".rida";
 
     public void Run(BuildContext ctx)
@@ -44,34 +44,43 @@ public sealed class IdaBombPass
         int offset = index * FunctionSize;
         Span<byte> body = section.Data.AsSpan(offset, FunctionSize);
 
-        // push rbp; mov rbp,rsp
+        // push rbp; mov rbp,rsp; sub rsp,0x20 (Windows x64 shadow space)
         body[0] = 0x55;
         body[1] = 0x48;
         body[2] = 0x89;
         body[3] = 0xE5;
+        body[4] = 0x48;
+        body[5] = 0x83;
+        body[6] = 0xEC;
+        body[7] = 0x20;
 
         // The equal immediates force ZF=1. Execution therefore skips the call,
         // while static xref discovery still indexes its valid rel32 operand.
         uint opaque = NextNonZeroUInt32(ctx.Rng);
-        body[4] = 0xB8; // mov eax, opaque
-        BinaryPrimitives.WriteUInt32LittleEndian(body[5..], opaque);
-        body[9] = 0x35; // xor eax, opaque
-        BinaryPrimitives.WriteUInt32LittleEndian(body[10..], opaque);
-        body[14] = 0x85; // test eax,eax
-        body[15] = 0xC0;
-        body[16] = 0x74; // jz epilogue
-        body[17] = 0x05;
-        body[18] = 0xE8; // cold call to another decoy head
+        body[8] = 0xB8; // mov eax, opaque
+        BinaryPrimitives.WriteUInt32LittleEndian(body[9..], opaque);
+        body[13] = 0x35; // xor eax, opaque
+        BinaryPrimitives.WriteUInt32LittleEndian(body[14..], opaque);
+        body[18] = 0x85; // test eax,eax
+        body[19] = 0xC0;
+        body[20] = 0x74; // jz epilogue
+        body[21] = 0x05;
+        body[22] = 0xE8; // cold call to another decoy head
 
         int targetIndex = (index * 73 + 19) % LightFunctionCount;
         if (targetIndex == index)
             targetIndex = (targetIndex + 1) % LightFunctionCount;
         int targetOffset = targetIndex * FunctionSize;
-        int displacement = targetOffset - (offset + 23);
-        BinaryPrimitives.WriteInt32LittleEndian(body[19..], displacement);
+        int displacement = targetOffset - (offset + 27);
+        BinaryPrimitives.WriteInt32LittleEndian(body[23..], displacement);
 
-        body[23] = 0x5D; // pop rbp
-        body[24] = 0xC3; // ret
+        // add rsp,0x20; pop rbp; ret
+        body[27] = 0x48;
+        body[28] = 0x83;
+        body[29] = 0xC4;
+        body[30] = 0x20;
+        body[31] = 0x5D; // pop rbp
+        body[32] = 0xC3; // ret
     }
 
     private static uint NextNonZeroUInt32(Random rng)

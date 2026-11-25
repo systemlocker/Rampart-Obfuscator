@@ -31,8 +31,8 @@ public sealed class AntiDebugPass
 
         if (channelSweep || inlineHookCheck || vehTamper)
             RuntimeDetectionState.Enable(ctx, RuntimeDetectionKind.DebuggerObserved);
-        if (dllNotify)
-            RuntimeDetectionState.Enable(ctx, RuntimeDetectionKind.ForeignModuleObserved);
+        // Passive DLL notification only records load telemetry; it never raises
+        // ForeignModuleObserved, so do not advertise that detection channel here.
 
         var requests = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         if (channelSweep)
@@ -49,6 +49,7 @@ public sealed class AntiDebugPass
         if (vehTamper)
         {
             Request(requests, "NTDLL.DLL", "RtlAddVectoredExceptionHandler");
+            Request(requests, "NTDLL.DLL", "RtlRemoveVectoredExceptionHandler");
             Request(requests, "KERNEL32.DLL", "RaiseException");
         }
         if (dllNotify)
@@ -70,15 +71,20 @@ public sealed class AntiDebugPass
         RuntimeDetectionStateLayout detectionState = RuntimeDetectionState.Ensure(ctx);
         uint channelStateRva = ctx.AllocData(32, 8);
 
-        Asm Build(uint selfRva)
+        BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
-            // Entry RSP is 8 mod 16. Four saves plus 0x28 bytes leave it
+            // Entry RSP is 8 mod 16. Two saves plus 0x28 bytes leave it
             // 16-aligned at both API call sites and reserve the shadow area.
-            a.PushR(Reg.Rbx).PushR(Reg.Rsi).PushR(Reg.Rdi).PushR(Reg.R15).SubRi(Reg.Rsp, 0x28);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.Rbx); pushes.Add((Reg.Rbx, (byte)a.Position));
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0x28);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva).AddRi(Reg.R15, checked((int)detectionState.Rva));
 
             a.CallRip("ext::IsDebuggerPresent");
+            a.Mov32Rr(Reg.Rax, Reg.Rax); // zero-extend 32-bit BOOL
             a.MovRipStore(Reg.Rax, "channel_state", 0);
 
             // PEB.BeingDebugged is a byte at offset 2 on native x64 Windows.
@@ -90,13 +96,17 @@ public sealed class AntiDebugPass
             a.XorRr(Reg.Rax, Reg.Rax).MovMr(Reg.Rsp, Reg.Rax, 0x20);
             a.MovRi(Reg.Rcx, -1).LeaRd(Reg.Rdx, Reg.Rsp, 0x20);
             a.CallRip("ext::CheckRemoteDebuggerPresent");
+            a.Mov32Rr(Reg.Rax, Reg.Rax);
             a.MovRipStore(Reg.Rax, "channel_state", 16);
+            // Trust the output BOOL only when CheckRemoteDebuggerPresent succeeded.
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "remote_failed");
             a.MovRm32(Reg.Rax, Reg.Rsp, 0x20);
             a.MovRipStore(Reg.Rax, "channel_state", 24);
+            a.Label("remote_failed");
 
-            a.MovRip(Reg.Rax, "channel_state", 0).TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.Ne, "debug_seen");
-            a.MovRip(Reg.Rax, "channel_state", 8).TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.Ne, "debug_seen");
-            a.MovRip(Reg.Rax, "channel_state", 24).TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "channel_done");
+            a.MovRip(Reg.Rax, "channel_state", 0).Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.Ne, "debug_seen");
+            a.MovRip(Reg.Rax, "channel_state", 8).Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.Ne, "debug_seen");
+            a.MovRip(Reg.Rax, "channel_state", 24).Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "channel_done");
             a.Label("debug_seen");
             RuntimeDetectionState.EmitRecord(
                 a,
@@ -107,11 +117,12 @@ public sealed class AntiDebugPass
                 labelPrefix: "channel_debug");
 
             a.Label("channel_done");
-            a.AddRi(Reg.Rsp, 0x28).PopR(Reg.R15).PopR(Reg.Rdi).PopR(Reg.Rsi).PopR(Reg.Rbx).Ret();
+            a.AddRi(Reg.Rsp, 0x28).PopR(Reg.R15).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
             a.Align(8).Label("channel_state").Dq(0, 0, 0, 0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ADBG.CHAN\0"));
             AddExternalSlots(a, "IsDebuggerPresent", "CheckRemoteDebuggerPresent");
-            return a;
+            return new BuiltRoutine(a, codeEnd, BuildUnwindInfo(pushes, 0x28, prologEnd));
         }
 
         uint rva = WriteRoutine(ctx, Build, iat,
@@ -128,10 +139,13 @@ public sealed class AntiDebugPass
         ulong hashSeed = (ulong)ctx.Rng.NextInt64() | 1UL;
         uint hookStateRva = ctx.AllocData(32, 8);
 
-        Asm Build(uint selfRva)
+        BuiltRoutine Build(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.Rbx).PushR(Reg.R15);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.Rbx); pushes.Add((Reg.Rbx, (byte)a.Position));
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva).AddRi(Reg.R15, checked((int)detectionState.Rva));
 
             // Hash 16 prologue bytes for each export. The fingerprints provide
@@ -173,11 +187,12 @@ public sealed class AntiDebugPass
                 taintConstant: 0,
                 labelPrefix: "inline_hook");
             a.Label("hook_done").PopR(Reg.R15).PopR(Reg.Rbx).Ret();
+            int codeEnd = a.Position;
 
             a.Align(8).Label("hook_state").Dq(0, 0, 0, 0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ADBG.HOOK\0"));
             AddExternalSlots(a, targets);
-            return a;
+            return new BuiltRoutine(a, codeEnd, BuildUnwindInfo(pushes, 0, prologEnd));
         }
 
         uint rva = WriteRoutine(ctx, Build, iat,
@@ -199,7 +214,7 @@ public sealed class AntiDebugPass
             // Handle only Rampart's private verification exception. All real
             // application exceptions continue down the existing VEH/SEH chain.
             a.MovRm(Reg.Rax, Reg.Rcx, 0).MovRm32(Reg.Rdx, Reg.Rax, 0);
-            a.MovRi(Reg.Rax, ProbeExceptionCode).CmpRr(Reg.Rdx, Reg.Rax);
+            a.Mov32Ri(Reg.Rax, ProbeExceptionCode).Cmp32Rr(Reg.Rdx, Reg.Rax);
             a.Jcc(Cc.Ne, "veh_continue_search");
             a.MovRi(Reg.Rax, 1).MovRipStore(Reg.Rax, "veh_hits");
             a.MovRi(Reg.Rax, -1).Ret(); // EXCEPTION_CONTINUE_EXECUTION
@@ -213,27 +228,38 @@ public sealed class AntiDebugPass
             new Dictionary<string, uint> { ["veh_hits"] = handlerHitsRva });
         GuardCfBuilder.RegisterTarget(ctx, handlerRva);
 
-        Asm Init(uint selfRva)
+        BuiltRoutine Init(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.R14).PushR(Reg.R15).SubRi(Reg.Rsp, 0x28);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.R14); pushes.Add((Reg.R14, (byte)a.Position));
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0x28);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);
             a.MovRr(Reg.R14, Reg.R15).AddRi(Reg.R14, checked((int)detectionState.Rva));
             a.MovRi(Reg.Rcx, 1); // first handler
             a.MovRi(Reg.Rdx, handlerRva).AddRr(Reg.Rdx, Reg.R15);
             a.CallRip("ext::RtlAddVectoredExceptionHandler");
             a.MovRipStore(Reg.Rax, "veh_state", 0); // nonzero registration handle
-            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "veh_done");
+            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "veh_tampered");
             a.MovRi(Reg.Rax, 1).MovRipStore(Reg.Rax, "veh_state", 8);
 
             // A private continuable exception proves that our callback is not
             // merely registered but is actually reachable in the live chain.
-            a.MovRi(Reg.Rcx, ProbeExceptionCode);
+            a.Mov32Ri(Reg.Rcx, ProbeExceptionCode);
             a.XorRr(Reg.Rdx, Reg.Rdx).XorRr(Reg.R8, Reg.R8).XorRr(Reg.R9, Reg.R9);
             a.CallRip("ext::RaiseException");
+
+            // Unregister the temporary probe handler once verification completes
+            // so the target process does not retain an unnecessary VEH slot.
+            a.MovRip(Reg.Rcx, "veh_state", 0);
+            a.CallRip("ext::RtlRemoveVectoredExceptionHandler");
+
             a.MovRi(Reg.Rax, handlerHitsRva).AddRr(Reg.Rax, Reg.R15).MovRm(Reg.Rax, Reg.Rax);
             a.MovRipStore(Reg.Rax, "veh_state", 16);
             a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.Ne, "veh_done");
+            a.Label("veh_tampered");
             RuntimeDetectionState.EmitRecord(
                 a,
                 Reg.R14,
@@ -243,10 +269,11 @@ public sealed class AntiDebugPass
                 labelPrefix: "veh_missing");
             a.Label("veh_done");
             a.AddRi(Reg.Rsp, 0x28).PopR(Reg.R15).PopR(Reg.R14).Ret();
+            int codeEnd = a.Position;
             a.Align(8).Label("veh_state").Dq(0, 0, 0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ADBG.VEH.STATE\0"));
-            AddExternalSlots(a, "RtlAddVectoredExceptionHandler", "RaiseException");
-            return a;
+            AddExternalSlots(a, "RtlAddVectoredExceptionHandler", "RtlRemoveVectoredExceptionHandler", "RaiseException");
+            return new BuiltRoutine(a, codeEnd, BuildUnwindInfo(pushes, 0x28, prologEnd));
         }
 
         uint vehStateRva = ctx.AllocData(24, 8);
@@ -279,10 +306,13 @@ public sealed class AntiDebugPass
             new Dictionary<string, uint> { ["notify_state"] = notifyStateRva });
         GuardCfBuilder.RegisterTarget(ctx, callbackRva);
 
-        Asm Init(uint selfRva)
+        BuiltRoutine Init(uint selfRva)
         {
             var a = new Asm();
-            a.PushR(Reg.R15).SubRi(Reg.Rsp, 0x20);
+            var pushes = new List<(Reg, byte)>();
+            a.PushR(Reg.R15); pushes.Add((Reg.R15, (byte)a.Position));
+            a.SubRi(Reg.Rsp, 0x20);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);
             a.XorRr(Reg.Rcx, Reg.Rcx); // flags = 0
             a.MovRi(Reg.Rdx, callbackRva).AddRr(Reg.Rdx, Reg.R15);
@@ -291,10 +321,11 @@ public sealed class AntiDebugPass
             a.CallRip("ext::LdrRegisterDllNotification");
             a.MovRipStore(Reg.Rax, "ldr_state", 0); // NTSTATUS
             a.AddRi(Reg.Rsp, 0x20).PopR(Reg.R15).Ret();
+            int codeEnd = a.Position;
             a.Align(8).Label("ldr_state").Dq(0, 0);
             a.Db(Encoding.ASCII.GetBytes("RMPT.ADBG.LDR.STATE\0"));
             AddExternalSlots(a, "LdrRegisterDllNotification");
-            return a;
+            return new BuiltRoutine(a, codeEnd, BuildUnwindInfo(pushes, 0x20, prologEnd));
         }
 
         uint loaderStateRva = ctx.AllocData(16, 8);
@@ -311,18 +342,69 @@ public sealed class AntiDebugPass
         a.MovRi(Reg.Rdx, value).CmpRr(Reg.Rax, Reg.Rdx).Jcc(Cc.E, target);
     }
 
+    internal readonly record struct BuiltRoutine(Asm Assembler, int CodeEnd, byte[]? UnwindInfo);
+
+    internal static byte[] BuildUnwindInfo(
+        IReadOnlyList<(Reg Register, byte OffsetAfterPush)> pushes,
+        int stackAllocBytes,
+        byte prologEnd)
+    {
+        if (stackAllocBytes < 0 || (stackAllocBytes & 7) != 0)
+            throw new ArgumentOutOfRangeException(nameof(stackAllocBytes), "Stack allocation must be a non-negative multiple of 8 bytes.");
+
+        var codes = new List<ushort>();
+        // UNWIND_CODE entries must appear in reverse prologue order (highest CodeOffset first).
+        if (stackAllocBytes is > 0 and <= 128)
+        {
+            byte opInfo = checked((byte)((stackAllocBytes / 8) - 1));
+            codes.Add((ushort)(prologEnd | (((opInfo << 4) | 2 /* UWOP_ALLOC_SMALL */) << 8)));
+        }
+        else if (stackAllocBytes > 128)
+        {
+            if (stackAllocBytes > 512 * 1024 - 8)
+                throw new ArgumentOutOfRangeException(nameof(stackAllocBytes));
+            codes.Add((ushort)(prologEnd | (1 /* UWOP_ALLOC_LARGE, info=0 */ << 8)));
+            codes.Add(checked((ushort)(stackAllocBytes / 8)));
+        }
+
+        for (int i = pushes.Count - 1; i >= 0; i--)
+        {
+            var (reg, offsetAfterPush) = pushes[i];
+            codes.Add((ushort)(offsetAfterPush | ((((int)reg << 4) | 0 /* UWOP_PUSH_NONVOL */) << 8)));
+        }
+
+        int paddedSlots = (codes.Count + 1) & ~1;
+        var unwind = new byte[4 + paddedSlots * 2];
+        unwind[0] = 1; // Version = 1, Flags = 0
+        unwind[1] = prologEnd;
+        unwind[2] = checked((byte)codes.Count);
+        unwind[3] = 0; // FrameRegister = 0
+        for (int i = 0; i < codes.Count; i++)
+            BinaryPrimitives.WriteUInt16LittleEndian(unwind.AsSpan(4 + i * 2), codes[i]);
+        return unwind;
+    }
+
     internal static uint WriteRoutine(
         BuildContext ctx,
         Func<uint, Asm> build,
         IReadOnlyDictionary<string, uint> externalIat,
+        IReadOnlyDictionary<string, uint>? externalData = null) =>
+        WriteRoutine(ctx, rva => new BuiltRoutine(build(rva), 0, null), externalIat, externalData);
+
+    internal static uint WriteRoutine(
+        BuildContext ctx,
+        Func<uint, BuiltRoutine> build,
+        IReadOnlyDictionary<string, uint> externalIat,
         IReadOnlyDictionary<string, uint>? externalData = null)
     {
-        int size = build(0).Assemble().Length;
+        BuiltRoutine probe = build(0);
+        int size = probe.Assembler.Assemble().Length;
         uint rva = ctx.Alloc(size, 16);
-        Asm assembler = build(rva);
+        BuiltRoutine built = build(rva);
+        Asm assembler = built.Assembler;
         byte[] code = assembler.Assemble();
         if (code.Length != size)
-            throw new InvalidOperationException("Anti-debug routine size shifted between layout passes.");
+            throw new InvalidOperationException("Runtime guard routine size shifted between layout passes.");
 
         foreach (var (position, target, _) in assembler.RipFixups)
         {
@@ -340,6 +422,8 @@ public sealed class AntiDebugPass
             BuildContext.PatchRipReferences(code, assembler, rva, externalData);
 
         ctx.WriteStub(rva, code);
+        if (built.UnwindInfo is not null && built.CodeEnd > 0)
+            ExceptionTableBuilder.Register(ctx, rva, checked(rva + (uint)built.CodeEnd), built.UnwindInfo);
         return rva;
     }
 
@@ -359,115 +443,30 @@ public sealed class AntiDebugPass
         functions.Add(function);
     }
 
-    /// <summary>Appends import descriptors while leaving every existing thunk,
-    /// name, and descriptor value intact. The loader accepts descriptors in any
-    /// readable image section; keeping the new IAT in .rmpd also gives callbacks
-    /// stable slots for the process lifetime.</summary>
+    /// <summary>Delegates runtime guard import additions to ImportDirectoryEditor
+    /// so existing imports are reused without duplicating descriptors or corrupting
+    /// the PE IAT data directory.</summary>
     internal static class RuntimeImports
     {
-        private sealed record ModuleLayout(
-            string Dll,
-            string[] Functions,
-            int DllOffset,
-            int[] HintNameOffsets,
-            int IntOffset,
-            int IatOffset);
-
         public static IReadOnlyDictionary<string, uint> Append(
             BuildContext ctx,
             Dictionary<string, HashSet<string>> requests)
         {
-            PeImage pe = ctx.Pe;
-            List<byte[]> existing = ReadDescriptors(pe);
-            var modules = requests
-                .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(item => (item.Key, item.Value.OrderBy(name => name, StringComparer.Ordinal).ToArray()))
-                .ToList();
-
-            int cursor = checked((existing.Count + modules.Count + 1) * 20);
-            var layouts = new List<ModuleLayout>(modules.Count);
-            foreach (var (dll, functions) in modules)
-            {
-                int dllOffset = cursor;
-                cursor = checked(cursor + Encoding.ASCII.GetByteCount(dll) + 1);
-                int[] hintNames = new int[functions.Length];
-                for (int i = 0; i < functions.Length; i++)
-                {
-                    cursor = Align(cursor, 2);
-                    hintNames[i] = cursor;
-                    cursor = checked(cursor + 2 + Encoding.ASCII.GetByteCount(functions[i]) + 1);
-                }
-                cursor = Align(cursor, 8);
-                int intOffset = cursor;
-                cursor = checked(cursor + (functions.Length + 1) * 8);
-                int iatOffset = cursor;
-                cursor = checked(cursor + (functions.Length + 1) * 8);
-                layouts.Add(new ModuleLayout(dll, functions, dllOffset, hintNames, intOffset, iatOffset));
-            }
-
-            uint baseRva = ctx.AllocData(cursor, 8);
-            var blob = new byte[cursor];
-            for (int i = 0; i < existing.Count; i++)
-                existing[i].CopyTo(blob, i * 20);
-
             var result = new Dictionary<string, uint>(StringComparer.Ordinal);
-            for (int moduleIndex = 0; moduleIndex < layouts.Count; moduleIndex++)
+            foreach (KeyValuePair<string, HashSet<string>> module in requests
+                         .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
             {
-                ModuleLayout module = layouts[moduleIndex];
-                int descriptor = (existing.Count + moduleIndex) * 20;
-                BinaryPrimitives.WriteUInt32LittleEndian(blob.AsSpan(descriptor), baseRva + (uint)module.IntOffset);
-                BinaryPrimitives.WriteUInt32LittleEndian(blob.AsSpan(descriptor + 12), baseRva + (uint)module.DllOffset);
-                BinaryPrimitives.WriteUInt32LittleEndian(blob.AsSpan(descriptor + 16), baseRva + (uint)module.IatOffset);
-                Encoding.ASCII.GetBytes(module.Dll + "\0").CopyTo(blob, module.DllOffset);
-
-                for (int functionIndex = 0; functionIndex < module.Functions.Length; functionIndex++)
-                {
-                    string function = module.Functions[functionIndex];
-                    int hintName = module.HintNameOffsets[functionIndex];
-                    Encoding.ASCII.GetBytes(function + "\0").CopyTo(blob, hintName + 2);
-                    ulong hintNameRva = baseRva + (uint)hintName;
-                    BinaryPrimitives.WriteUInt64LittleEndian(
-                        blob.AsSpan(module.IntOffset + functionIndex * 8), hintNameRva);
-                    BinaryPrimitives.WriteUInt64LittleEndian(
-                        blob.AsSpan(module.IatOffset + functionIndex * 8), hintNameRva);
-                    result.Add(function, baseRva + (uint)(module.IatOffset + functionIndex * 8));
-                }
+                string[] names = module.Value.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+                if (names.Length == 0)
+                    continue;
+                IReadOnlyDictionary<string, uint> added = ImportDirectoryEditor.EnsureNamedImports(
+                    ctx,
+                    module.Key,
+                    names);
+                foreach (KeyValuePair<string, uint> entry in added)
+                    result[entry.Key] = entry.Value;
             }
-
-            ctx.WriteData(baseRva, blob);
-            pe.SetDirectory(DataDir.Import, baseRva, (uint)((existing.Count + modules.Count + 1) * 20));
-            if (pe.Directory(DataDir.Iat).IsEmpty && layouts.Count > 0)
-            {
-                int first = layouts.Min(module => module.IatOffset);
-                int end = layouts.Max(module => module.IatOffset + (module.Functions.Length + 1) * 8);
-                pe.SetDirectory(DataDir.Iat, baseRva + (uint)first, (uint)(end - first));
-            }
-            ctx.Log.Add(new("anti-debug.imports",
-                $"appended {result.Count} runtime APIs in {modules.Count} descriptors; preserved {existing.Count} original descriptors"));
             return result;
         }
-
-        private static List<byte[]> ReadDescriptors(PeImage pe)
-        {
-            var descriptors = new List<byte[]>();
-            DataDirectory directory = pe.Directory(DataDir.Import);
-            if (directory.IsEmpty)
-                return descriptors;
-
-            // Directory sizes in the wild are inconsistent about including the
-            // null descriptor, so terminate by contents with a hard safety cap.
-            uint rva = directory.RelativeVirtualAddress;
-            for (int i = 0; i < 4096; i++, rva += 20)
-            {
-                byte[] descriptor = pe.ReadRva(rva, 20);
-                if (descriptor.All(value => value == 0))
-                    return descriptors;
-                descriptors.Add(descriptor);
-            }
-            throw new BadImageFormatException("Import directory has no terminating descriptor within 4096 entries.");
-        }
-
-        private static int Align(int value, int alignment) =>
-            checked((value + alignment - 1) / alignment * alignment);
     }
 }

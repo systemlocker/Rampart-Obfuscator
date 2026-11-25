@@ -49,7 +49,7 @@ public static class X64Decoder
             return false;
 
         int i = offset;
-        bool rexW = false, opSize66 = false, addrSize67 = false;
+        bool rexW = false, rexB = false, opSize66 = false, addrSize67 = false, hasF3 = false;
 
         // Prefixes. A legacy prefix after REX makes that earlier REX ineffective;
         // accepting it as still active can turn a 16/32-bit immediate into imm64.
@@ -59,11 +59,14 @@ public static class X64Decoder
             if (b is 0xF0 or 0xF2 or 0xF3 or 0x2E or 0x36 or 0x3E or 0x26 or 0x64 or 0x65)
             {
                 rexW = false;
+                rexB = false;
+                if (b == 0xF3)
+                    hasF3 = true;
                 i++;
             }
-            else if (b == 0x66) { rexW = false; opSize66 = true; i++; }
-            else if (b == 0x67) { rexW = false; addrSize67 = true; i++; }
-            else if (b >= 0x40 && b <= 0x4F) { rexW = (b & 8) != 0; i++; }
+            else if (b == 0x66) { rexW = false; rexB = false; opSize66 = true; i++; }
+            else if (b == 0x67) { rexW = false; rexB = false; addrSize67 = true; i++; }
+            else if (b >= 0x40 && b <= 0x4F) { rexW = (b & 8) != 0; rexB = (b & 1) != 0; i++; }
             else break;
 
             // Architectural x86 instructions are at most 15 bytes including
@@ -75,6 +78,7 @@ public static class X64Decoder
             return false;
 
         byte op = code[i];
+        byte op2 = 0;
         int immSize = 0;
         bool hasModRm = false;
         var mnemonic = X64Mnemonic.Other;
@@ -87,9 +91,13 @@ public static class X64Decoder
             i++;
             if (i >= code.Length)
                 return false;
-            byte op2 = code[i];
+            op2 = code[i];
             // Escape tables we refuse to guess lengths for (AVX / exotic SSE4).
             if (op2 == 0x38 || op2 == 0x3A)
+                return false;
+            // 16-bit operand-size override on near Jcc alters displacement width
+            // and truncates RIP in 64-bit mode; refuse to decode/rewrite it.
+            if (op2 is >= 0x80 and <= 0x8F && opSize66)
                 return false;
 
             hasModRm = op2 switch
@@ -111,41 +119,41 @@ public static class X64Decoder
 
             if (op2 >= 0x80 && op2 <= 0x8F)
                 mnemonic = X64Mnemonic.JccRel;
-            else if (op2 == 0x1E) // endbr64 etc. — treat as plain
-                mnemonic = X64Mnemonic.Nop;
             else if (op2 == 0x0B)
                 mnemonic = X64Mnemonic.Ud2;
         }
         else
         {
-            // These bytes introduce VEX/EVEX encodings in 64-bit mode. Their
-            // instruction maps are intentionally outside this conservative
-            // decoder; consuming just the prefix would desynchronize the scan.
-            if (op is 0x62 or 0xC4 or 0xC5)
+            // Reject VEX/EVEX introducers (62/C4/C5) and opcodes that are invalid
+            // in 64-bit mode so scans never desynchronize on malformed or unsupported bytes.
+            if (op is 0x06 or 0x07 or 0x0E or 0x16 or 0x17 or 0x1E or 0x1F
+                or 0x27 or 0x2F or 0x37 or 0x3F or 0x60 or 0x61 or 0x62
+                or 0x82 or 0x9A or 0xC4 or 0xC5 or 0xCE or 0xD4 or 0xD5 or 0xD6 or 0xEA)
+                return false;
+            // 16-bit operand-size override on near CALL/JMP changes rel width.
+            if (op is 0xE8 or 0xE9 && opSize66)
                 return false;
 
             hasModRm = op switch
             {
-                <= 0x05 => false,
-                0x06 or 0x07 or 0x08 or 0x09 or 0x0A or 0x0B or 0x0C or 0x0D or 0x0E
-                    or 0x0F => false,
-                0x14 or 0x15 or 0x1C or 0x1D or 0x24 or 0x25 or 0x26 or 0x27
-                    or 0x2C or 0x2D or 0x2E or 0x2F => false,
-                0x34 or 0x35 or 0x36 or 0x37 or 0x3C or 0x3D or 0x3E or 0x3F => false,
+                0x04 or 0x05 or 0x0C or 0x0D => false,
+                0x14 or 0x15 or 0x1C or 0x1D or 0x24 or 0x25 or 0x26
+                    or 0x2C or 0x2D or 0x2E => false,
+                0x34 or 0x35 or 0x36 or 0x3C or 0x3D or 0x3E => false,
                 >= 0x50 and <= 0x5F => false,
-                0x60 or 0x61 or 0x62 or 0x63 => op == 0x63, // 60-62 invalid, 63 movsxd has modrm
-                0x68 or 0x69 or 0x6A or 0x6B => op == 0x69 || op == 0x6B,
+                0x63 => true, // movsxd
+                0x68 or 0x69 or 0x6A or 0x6B => op is 0x69 or 0x6B,
                 >= 0x6C and <= 0x6F => false,
                 >= 0x70 and <= 0x7F => false,
-                0x82 or 0x84 or 0x85 or 0x86 or 0x87 or 0x88 or 0x89 or 0x8A or 0x8B
-                    or 0x8C or 0x8D or 0x8E or 0x8F => op != 0x82,
+                0x84 or 0x85 or 0x86 or 0x87 or 0x88 or 0x89 or 0x8A or 0x8B
+                    or 0x8C or 0x8D or 0x8E or 0x8F => true,
                 >= 0x90 and <= 0x9F => false,
                 >= 0xA0 and <= 0xAF => false,
                 >= 0xB0 and <= 0xBF => false,
-                0xC0 or 0xC1 or 0xC2 or 0xC3 or 0xC4 or 0xC5 or 0xC6 or 0xC7 or 0xC8
-                    or 0xC9 or 0xCA or 0xCB or 0xCC or 0xCD or 0xCE or 0xCF => op is 0xC0 or 0xC1 or 0xC6 or 0xC7,
+                0xC0 or 0xC1 or 0xC2 or 0xC3 or 0xC6 or 0xC7 or 0xC8
+                    or 0xC9 or 0xCA or 0xCB or 0xCC or 0xCD or 0xCF => op is 0xC0 or 0xC1 or 0xC6 or 0xC7,
                 0xD0 or 0xD1 or 0xD2 or 0xD3 => true,
-                0xD4 or 0xD5 or 0xD6 or 0xD7 => false,
+                0xD7 => false,
                 >= 0xD8 and <= 0xDF => true,
                 >= 0xE0 and <= 0xEF => false,
                 0xF4 or 0xF5 or 0xF8 or 0xF9 or 0xFA or 0xFB or 0xFC or 0xFD => false,
@@ -155,17 +163,19 @@ public static class X64Decoder
                 _ => true,
             };
 
+            // REX.W overrides the 66h operand-size prefix on x86-64.
+            int immWordOrDword = (!rexW && opSize66) ? 2 : 4;
             immSize = op switch
             {
                 0x04 or 0x0C or 0x14 or 0x1C or 0x24 or 0x2C or 0x34 or 0x3C or 0xA8
                     or 0x6A or 0xB0 or 0xB1 or 0xB2 or 0xB3 or 0xB4 or 0xB5 or 0xB6
                     or 0xB7 or 0xC0 or 0xC1 or 0xCD or 0xE4 or 0xE5 or 0xE6 or 0xE7 => 1,
                 0x05 or 0x0D or 0x15 or 0x1D or 0x25 or 0x2D or 0x35 or 0x3D or 0x69
-                    or 0xA9 => opSize66 ? 2 : 4,
-                0x68 => opSize66 ? 2 : 4,
+                    or 0xA9 => immWordOrDword,
+                0x68 => immWordOrDword,
                 0x6B => 1,
                 0x80 or 0x83 or 0xC6 => 1,
-                0x81 or 0xC7 => opSize66 ? 2 : 4,
+                0x81 or 0xC7 => immWordOrDword,
                 >= 0xB8 and <= 0xBF => rexW ? 8 : (opSize66 ? 2 : 4),
                 0x70 or 0x71 or 0x72 or 0x73 or 0x74 or 0x75 or 0x76 or 0x77 or 0x78
                     or 0x79 or 0x7A or 0x7B or 0x7C or 0x7D or 0x7E or 0x7F => 1,
@@ -181,14 +191,15 @@ public static class X64Decoder
             {
                 0xE9 or 0xEB => X64Mnemonic.JmpRel,
                 >= 0x70 and <= 0x7F => X64Mnemonic.JccRel,
+                >= 0xE0 and <= 0xE3 => X64Mnemonic.JccRel, // LOOPcc / JRCXZ
                 0xE8 => X64Mnemonic.CallRel,
                 0xC3 => X64Mnemonic.Ret,
                 0xC2 => X64Mnemonic.RetImm,
                 >= 0xB8 and <= 0xBF => X64Mnemonic.MovRegImm,
                 0x68 or 0x6A => X64Mnemonic.PushImm,
-                0x90 => X64Mnemonic.Nop,
+                // With REX.B set, 0x90 encodes XCHG r8/r8d, rAX rather than NOP.
+                0x90 => rexB ? X64Mnemonic.Other : X64Mnemonic.Nop,
                 0xCC => X64Mnemonic.Int3,
-                0x0F => X64Mnemonic.Other,
                 _ => X64Mnemonic.Other,
             };
         }
@@ -219,8 +230,10 @@ public static class X64Decoder
             }
             else if (rm == 5 && mod == 0)
             {
-                // RIP-relative memory operand.
-                ripRelative = true;
+                // With 67h address-size override, addressing is 32-bit EIP-relative
+                // rather than 64-bit RIP-relative; preserve dispSize without tagging
+                // a 64-bit RIP-relative reference.
+                ripRelative = !addrSize67;
                 dispSize = 4;
             }
 
@@ -236,6 +249,17 @@ public static class X64Decoder
         if (total > 15 || offset + total > code.Length)
             return false;
 
+        // Refine two-byte NOP forms once ModRM is known:
+        // - 0F 1F /0 is canonical multi-byte NOP
+        // - F3 0F 1E FA/FB are ENDBR64/ENDBR32 (whereas F3 0F 1E /1 is RDSSP)
+        if (opcodeIsTwoByte && hasModRm)
+        {
+            if (op2 == 0x1F && ((modrmValue >> 3) & 7) == 0)
+                mnemonic = X64Mnemonic.Nop;
+            else if (op2 == 0x1E && hasF3 && modrmValue is 0xFA or 0xFB)
+                mnemonic = X64Mnemonic.Nop;
+        }
+
         // The F6/F7 TEST special case: only reg-field 0/1 carries an immediate.
         // The 0x0F-two-byte form was consumed above; here `op` is the one-byte opcode
         // only when no 0F escape was seen (tracked by opcodeIsTwoByte).
@@ -244,7 +268,7 @@ public static class X64Decoder
             byte reg = (byte)((modrmValue >> 3) & 7);
             if (reg is 0 or 1)
             {
-                int extra = op == 0xF6 ? 1 : (opSize66 ? 2 : 4);
+                int extra = op == 0xF6 ? 1 : ((!rexW && opSize66) ? 2 : 4);
                 total += extra;
                 if (total > 15 || offset + total > code.Length)
                     return false;
@@ -267,7 +291,18 @@ public static class X64Decoder
             };
             imm = instructionRva + (uint)total + rel;
         }
-        else if (immSize > 0 && mnemonic is X64Mnemonic.MovRegImm or X64Mnemonic.PushImm)
+        else if (immSize > 0 && mnemonic == X64Mnemonic.PushImm)
+        {
+            // PUSH imm8/imm16/imm32 sign-extends its operand to 64 bits.
+            imm = immSize switch
+            {
+                1 => unchecked((sbyte)code[immPos]),
+                2 => System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(code[immPos..]),
+                4 => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(code[immPos..]),
+                _ => 0,
+            };
+        }
+        else if (immSize > 0 && mnemonic == X64Mnemonic.MovRegImm)
         {
             imm = immSize switch
             {
@@ -294,10 +329,10 @@ public static class X64Decoder
             if (reg == 4) mnemonic = X64Mnemonic.JmpIndirect;
         }
 
-        // lea r, [rip+disp] — mnemonic refinement.
-        if (op == 0x8D && ripRelative)
+        // lea r, [rip+disp] and mov r/m, [rip+disp] — mnemonic refinement.
+        if (!opcodeIsTwoByte && op == 0x8D && ripRelative)
             mnemonic = X64Mnemonic.LeaRip;
-        if (op is 0x8B or 0x89 or 0x8A or 0x88 && ripRelative)
+        if (!opcodeIsTwoByte && op is 0x8B or 0x89 or 0x8A or 0x88 && ripRelative)
             mnemonic = X64Mnemonic.MovRip;
 
         instr = new X64Instruction

@@ -35,36 +35,46 @@ public static class Aes128Ctr
             return output;
 
         using Aes aes = CreateEcbAes(key);
-        using ICryptoTransform encryptor = aes.CreateEncryptor(); // one encryptor, reused for every block
 
-        // Array-backed buffers because TransformBlock only offers the classic
-        // (array, offset, count) signature; both are reused for every block.
-        byte[] counterBlock = new byte[BlockSizeBytes];
-        byte[] keystream = new byte[BlockSizeBytes];
+        Span<byte> counterBlock = stackalloc byte[BlockSizeBytes];
+        Span<byte> keystream = stackalloc byte[BlockSizeBytes];
 
-        // The nonce occupies the low half for the whole message; only the counter
-        // half changes between blocks.
-        BinaryPrimitives.WriteUInt64LittleEndian(counterBlock.AsSpan(0, 8), nonce);
-
-        ulong counter = initialCounter;
-        int offset = 0;
-        while (offset < input.Length)
+        try
         {
-            BinaryPrimitives.WriteUInt64LittleEndian(counterBlock.AsSpan(8, 8), counter);
+            // The nonce occupies the low half for the whole message; only the counter
+            // half changes between blocks.
+            BinaryPrimitives.WriteUInt64LittleEndian(counterBlock[..8], nonce);
 
-            // ECB over a single fresh block is the raw AES permutation, which is all
-            // CTR needs: keystream block i = AES(nonce || LE64(initialCounter + i)).
-            encryptor.TransformBlock(counterBlock, 0, BlockSizeBytes, keystream, 0);
+            ulong counter = initialCounter;
+            int offset = 0;
+            while (offset < input.Length)
+            {
+                BinaryPrimitives.WriteUInt64LittleEndian(counterBlock[8..], counter);
 
-            int n = Math.Min(BlockSizeBytes, input.Length - offset);
-            for (int i = 0; i < n; i++)
-                output[offset + i] = (byte)(input[offset + i] ^ keystream[i]);
+                // Raw AES-ECB over one counter block yields the CTR keystream block
+                // without allocating a stateful ICryptoTransform or heap scratch arrays.
+                aes.EncryptEcb(counterBlock, keystream, PaddingMode.None);
 
-            offset += n;
-            counter++;
+                int n = Math.Min(BlockSizeBytes, input.Length - offset);
+                for (int i = 0; i < n; i++)
+                    output[offset + i] = (byte)(input[offset + i] ^ keystream[i]);
+
+                offset += n;
+                if (offset < input.Length)
+                {
+                    if (counter == ulong.MaxValue)
+                        throw new InvalidOperationException("AES-128-CTR 64-bit block counter overflowed.");
+                    counter++;
+                }
+            }
+
+            return output;
         }
-
-        return output;
+        finally
+        {
+            CryptographicOperations.ZeroMemory(counterBlock);
+            CryptographicOperations.ZeroMemory(keystream);
+        }
     }
 
     /// <summary>
@@ -81,22 +91,38 @@ public static class Aes128Ctr
             throw new ArgumentException($"An AES block must be exactly {BlockSizeBytes} bytes (got {block.Length}).", nameof(block));
 
         using Aes aes = CreateEcbAes(key);
-        using ICryptoTransform encryptor = aes.CreateEncryptor();
-
-        // Round-trip through scratch rather than encrypting in place: TransformBlock
-        // makes no promise about aliased input and output buffers.
-        byte[] cipher = new byte[BlockSizeBytes];
-        encryptor.TransformBlock(block.ToArray(), 0, BlockSizeBytes, cipher, 0);
-        cipher.AsSpan().CopyTo(block);
+        Span<byte> cipher = stackalloc byte[BlockSizeBytes];
+        try
+        {
+            aes.EncryptEcb(block, cipher, PaddingMode.None);
+            cipher.CopyTo(block);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(cipher);
+        }
     }
 
     /// <summary>An AES instance configured as a raw block cipher (ECB, no padding).</summary>
     private static Aes CreateEcbAes(ReadOnlySpan<byte> key)
     {
+        byte[] keyCopy = key.ToArray();
         Aes aes = Aes.Create();
-        aes.Mode = CipherMode.ECB;
-        aes.Padding = PaddingMode.None;
-        aes.Key = key.ToArray(); // KeySize (128) is derived from the key length
-        return aes;
+        try
+        {
+            aes.Mode = CipherMode.ECB;
+            aes.Padding = PaddingMode.None;
+            aes.Key = keyCopy; // KeySize (128) is derived from the key length
+            return aes;
+        }
+        catch
+        {
+            aes.Dispose();
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(keyCopy);
+        }
     }
 }

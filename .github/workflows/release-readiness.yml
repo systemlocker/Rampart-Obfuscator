@@ -139,6 +139,21 @@ jobs:
             throw 'Installed tool returned an invalid balanced configuration preview.'
           }
 
+          $coreDll = (Resolve-Path -LiteralPath src/Rampart.Core/bin/Release/net8.0/Rampart.Core.dll).Path
+          $inspectOutput = @(& $rampart inspect $coreDll --json)
+          if ($LASTEXITCODE -ne 0) { throw 'Installed tool failed to inspect Rampart.Core.dll.' }
+          $inspect = ($inspectOutput -join "`n") | ConvertFrom-Json
+          if ($inspect.Classification.Target.Kind -ne 'ManagedIl' -or $inspect.Classification.Disposition -ne 'Supported') {
+            throw "Installed tool reported unexpected inspection classification for Rampart.Core.dll: $($inspect.Classification.Target.Kind)/$($inspect.Classification.Disposition)."
+          }
+
+          $dryRunOutput = @(& $rampart protect $coreDll --dry-run --json)
+          if ($LASTEXITCODE -ne 0) { throw 'Installed tool failed managed dry-run preview on Rampart.Core.dll.' }
+          $dryRun = ($dryRunOutput -join "`n") | ConvertFrom-Json
+          if ($dryRun.Plan.Classification.Target.Kind -ne 'ManagedIl' -or $dryRun.BudgetPoints -ne 0) {
+            throw 'Installed tool returned an unexpected managed dry-run preview.'
+          }
+
       - name: Upload release candidates
         uses: actions/upload-artifact@v7
         with:

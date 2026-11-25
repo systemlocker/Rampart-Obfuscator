@@ -19,6 +19,20 @@ internal static class StringCandidates
         PeImage pe = context.Pe;
         var excluded = MergeRanges(MetadataRanges(pe));
         var found = new Dictionary<uint, StringCandidate>();
+        // Track every observed pointer target (including short <3-char suffixes
+        // and relocated DIR64 pointer targets) so interior aliases are rejected.
+        var allObservedTargets = new HashSet<uint>();
+        foreach (RelocEntry relocation in Relocations.Enumerate(pe))
+        {
+            if (relocation.Type != Relocations.TypeAbsolute)
+                continue;
+            if (!pe.TryRvaToOffset(relocation.Rva, out _) || !pe.TryRvaToOffset(checked(relocation.Rva + 7), out _))
+                continue;
+            ulong targetVa = pe.ReadU64(relocation.Rva);
+            if (targetVa >= pe.ImageBase && targetVa - pe.ImageBase < pe.SizeOfImage)
+                allObservedTargets.Add((uint)(targetVa - pe.ImageBase));
+        }
+
         foreach (FunctionDescriptor function in context.Functions)
         {
             // Relocated bodies can contain inline tables/bytecode. Their original
@@ -35,8 +49,9 @@ internal static class StringCandidates
                 if (!X64Decoder.TryDecode(code, position, function.BeginRva + (uint)position, out var instruction)) break;
                 position += instruction.Length;
                 if (instruction.Mnemonic != X64Mnemonic.LeaRip) continue;
-                if (!Measure(pe, instruction.RipTargetRva, out int bytes, out int chars, out int unit)) continue;
                 uint target = instruction.RipTargetRva;
+                allObservedTargets.Add(target);
+                if (!Measure(pe, target, out int bytes, out int chars, out int unit)) continue;
                 if (IsExcluded(excluded, target, bytes + unit)) continue;
                 var candidate = new StringCandidate(target, bytes, chars, unit,
                     context.LevelFor("strings.encryption", function),
@@ -83,6 +98,17 @@ internal static class StringCandidates
             if (next > first + 1)
                 for (int index = first; index < next; index++) overlapping.Add(candidates[index].Rva);
             first = next;
+        }
+        // Also reject any candidate whose interior bytes are referenced by another
+        // LEA or DIR64 relocation (for example a 1- or 2-character pooled suffix).
+        uint[] sortedTargets = allObservedTargets.OrderBy(rva => rva).ToArray();
+        foreach (StringCandidate candidate in candidates)
+        {
+            ulong end = (ulong)candidate.Rva + (uint)(candidate.Length + candidate.UnitSize);
+            int idx = Array.BinarySearch(sortedTargets, candidate.Rva);
+            int nextIdx = idx >= 0 ? idx + 1 : ~idx;
+            if (nextIdx < sortedTargets.Length && sortedTargets[nextIdx] < end)
+                overlapping.Add(candidate.Rva);
         }
         return candidates.Where(value =>
             value.Encryption != ProtectionLevel.Off &&
@@ -131,11 +157,19 @@ internal static class StringCandidates
             || !section.Characteristics.HasFlag(SectionCharacteristics.CntInitializedData)
             || !section.Characteristics.HasFlag(SectionCharacteristics.MemRead)) return false;
         int start = checked((int)(rva - section.VirtualAddress));
-        int end = (int)Math.Min((uint)section.Data.Length, section.VirtualSize);
+        int end = (int)Math.Min((uint)section.Data.Length, section.ResolvedVirtualSize);
         if (start < 0 || start >= end) return false;
         ReadOnlySpan<byte> data = section.Data.AsSpan(0, end);
         // A preceding terminator is deliberately not required: linker suffix
         // pooling is valid. Overlap rejection is based on all observed targets.
+        // Check UTF-16LE before ASCII when the second byte is NUL on an even RVA
+        // so ASCII probes do not reject wide strings, and avoid treating plain
+        // ASCII text as accidental UTF-16LE CJK code points.
+        if ((rva & 1) == 0 && start + 1 < data.Length && data[start] >= 0x20 && data[start + 1] == 0)
+        {
+            unit = 2;
+            return MeasureWidth(data, start, 2, out length, out characters);
+        }
         if (MeasureWidth(data, start, 1, out length, out characters)) return true;
         unit = 2;
         return (rva & 1) == 0 && MeasureWidth(data, start, 2, out length, out characters);
@@ -173,52 +207,85 @@ internal static class StringCandidates
         for (int index = 0; index < 16; index++)
         {
             DataDirectory directory = pe.Directory(index);
-            if (directory.IsEmpty || index == DataDir.Security) continue;
-            if (index is DataDir.Import or DataDir.Iat or DataDir.Basereloc)
-                ranges.Add((directory.RelativeVirtualAddress, checked((int)directory.Size)));
+            if (directory.IsEmpty || index == DataDir.Security || directory.RelativeVirtualAddress == 0)
+                continue;
+            // BoundImport frequently resides inside the PE headers before the first section.
+            if (index == DataDir.BoundImport && directory.RelativeVirtualAddress < pe.SizeOfHeaders)
+                continue;
+            if (directory.Size > int.MaxValue)
+            {
+                ExcludeSection(directory.RelativeVirtualAddress);
+                continue;
+            }
+            if (index is DataDir.Import or DataDir.Iat or DataDir.Basereloc
+                or DataDir.Debug or DataDir.LoadConfig or DataDir.Exception
+                or DataDir.Export or DataDir.Tls or DataDir.BoundImport)
+            {
+                ranges.Add((directory.RelativeVirtualAddress, (int)directory.Size));
+            }
             else
             {
-                // Unwind, resources, exports, TLS, and load-config records have
-                // nested ownership. Do not guess strings within their sections.
-                PeImage.Section? section = pe.SectionFromRva(directory.RelativeVirtualAddress);
-                if (section is not null) ranges.Add((section.VirtualAddress, checked((int)section.ResolvedVirtualSize)));
+                // Resource and other structured directories retain full-section exclusion.
+                ExcludeSection(directory.RelativeVirtualAddress);
             }
         }
         foreach (RelocEntry relocation in Relocations.Enumerate(pe))
             ranges.Add((relocation.Rva, 8));
-        foreach (RuntimeFunction function in ExceptionTable.Parse(pe)) ExcludeSection(function.UnwindRva);
+
+        // Exclude exact UNWIND_INFO spans rather than the entire containing section
+        // (MSVC/Clang typically place .xdata inside .rdata alongside string literals).
+        foreach (RuntimeFunction function in ExceptionTable.Parse(pe))
+            ExcludeUnwindChain(pe, function.UnwindRva, ranges, ExcludeSection);
+
         DataDirectory tls = pe.Directory(DataDir.Tls);
-        if (!tls.IsEmpty)
+        if (!tls.IsEmpty && tls.RelativeVirtualAddress != 0 && tls.Size >= 40)
         {
-            ulong start = pe.ReadU64(tls.RelativeVirtualAddress), end = pe.ReadU64(tls.RelativeVirtualAddress + 8);
-            if (start != 0 && end > start) ranges.Add((pe.VaToRva(start), checked((int)(end - start))));
-            // The TLS index and callback array are loader-owned even when placed
-            // outside the section containing IMAGE_TLS_DIRECTORY64.
-            for (uint offset = 16; offset <= 24; offset += 8)
+            ranges.Add((tls.RelativeVirtualAddress, checked((int)Math.Max(tls.Size, 40u))));
+            ulong start = pe.ReadU64(tls.RelativeVirtualAddress);
+            ulong end = pe.ReadU64(tls.RelativeVirtualAddress + 8);
+            if (start != 0 && end > start && start >= pe.ImageBase && end - pe.ImageBase <= pe.SizeOfImage)
+                ranges.Add((pe.VaToRva(start), checked((int)(end - start))));
+            ulong indexVa = pe.ReadU64(tls.RelativeVirtualAddress + 16);
+            if (indexVa >= pe.ImageBase && indexVa - pe.ImageBase < pe.SizeOfImage)
+                ranges.Add((pe.VaToRva(indexVa), 4));
+            ulong callbacksVa = pe.ReadU64(tls.RelativeVirtualAddress + 24);
+            if (callbacksVa >= pe.ImageBase && callbacksVa - pe.ImageBase < pe.SizeOfImage)
             {
-                ulong pointer = pe.ReadU64(tls.RelativeVirtualAddress + offset);
-                if (pointer != 0) ExcludeSection(pe.VaToRva(pointer));
+                uint cbRva = pe.VaToRva(callbacksVa);
+                for (uint i = 0; i < 4096; i++)
+                {
+                    uint slotRva = checked(cbRva + i * 8);
+                    if (!pe.TryRvaToOffset(slotRva, out _) || !pe.TryRvaToOffset(checked(slotRva + 7), out _))
+                    {
+                        ExcludeSection(cbRva);
+                        break;
+                    }
+                    ranges.Add((slotRva, 8));
+                    if (pe.ReadU64(slotRva) == 0)
+                        break;
+                }
             }
         }
+
         DataDirectory debug = pe.Directory(DataDir.Debug);
-        for (uint offset = 0; (ulong)offset + 28 <= debug.Size; offset += 28)
+        if (!debug.IsEmpty && debug.RelativeVirtualAddress != 0)
         {
-            uint size = pe.ReadU32(debug.RelativeVirtualAddress + offset + 16);
-            uint rva = pe.ReadU32(debug.RelativeVirtualAddress + offset + 20);
-            if (rva != 0 && size != 0) ranges.Add((rva, checked((int)size)));
+            for (uint offset = 0; (ulong)offset + 28 <= debug.Size; offset += 28)
+            {
+                uint entryRva = checked(debug.RelativeVirtualAddress + offset);
+                uint size = pe.ReadU32(checked(entryRva + 16));
+                uint rva = pe.ReadU32(checked(entryRva + 20));
+                if (rva != 0 && size != 0 && size <= int.MaxValue)
+                    ranges.Add((rva, (int)size));
+            }
         }
+
         DataDirectory loadConfig = pe.Directory(DataDir.LoadConfig);
-        // Load-config evolves across toolchains. Conservatively retain every
-        // section targeted by an in-image VA, rather than claiming knowledge of
-        // future security-cookie/CFG/XFG/dynamic-relocation record layouts.
-        for (uint offset = 0; (ulong)offset + 8 <= loadConfig.Size; offset += 8)
-        {
-            ulong pointer = pe.ReadU64(loadConfig.RelativeVirtualAddress + offset);
-            if (pointer >= pe.ImageBase && pointer - pe.ImageBase < pe.SizeOfImage)
-                ExcludeSection((uint)(pointer - pe.ImageBase));
-        }
+        if (!loadConfig.IsEmpty && loadConfig.RelativeVirtualAddress != 0 && loadConfig.Size >= 4)
+            ExcludeLoadConfig(pe, loadConfig, ranges, ExcludeSection);
+
         DataDirectory exports = pe.Directory(DataDir.Export);
-        if (!exports.IsEmpty)
+        if (!exports.IsEmpty && exports.RelativeVirtualAddress != 0 && exports.Size >= 40)
         {
             ExcludeString(pe.ReadU32(exports.RelativeVirtualAddress + 12));
             uint functions = pe.ReadU32(exports.RelativeVirtualAddress + 20);
@@ -227,13 +294,14 @@ internal static class StringCandidates
             uint nameTable = pe.ReadU32(exports.RelativeVirtualAddress + 32);
             uint ordinals = pe.ReadU32(exports.RelativeVirtualAddress + 36);
             if (names > 1_000_000 || functions > 1_000_000) throw new BadImageFormatException("Export table exceeds string discovery bounds.");
-            ranges.Add((eat, checked((int)functions * 4)));
-            ranges.Add((nameTable, checked((int)names * 4)));
-            ranges.Add((ordinals, checked((int)names * 2)));
-            for (uint index = 0; index < names; index++) ExcludeString(pe.ReadU32(nameTable + index * 4));
+            if (eat != 0 && functions > 0) ranges.Add((eat, checked((int)functions * 4)));
+            if (nameTable != 0 && names > 0) ranges.Add((nameTable, checked((int)names * 4)));
+            if (ordinals != 0 && names > 0) ranges.Add((ordinals, checked((int)names * 2)));
+            if (nameTable != 0)
+                for (uint index = 0; index < names; index++) ExcludeString(pe.ReadU32(checked(nameTable + index * 4)));
         }
         DataDirectory resources = pe.Directory(DataDir.Resource);
-        if (!resources.IsEmpty)
+        if (!resources.IsEmpty && resources.RelativeVirtualAddress != 0)
         {
             var pending = new Stack<uint>();
             var visited = new HashSet<uint>();
@@ -243,19 +311,19 @@ internal static class StringCandidates
                 if (!visited.Add(offset)) continue;
                 if (visited.Count > 65536 || (ulong)offset + 16 > resources.Size)
                     throw new BadImageFormatException("Resource tree exceeds string discovery bounds.");
-                byte[] header = pe.ReadRva(resources.RelativeVirtualAddress + offset, 16);
+                byte[] header = pe.ReadRva(checked(resources.RelativeVirtualAddress + offset), 16);
                 uint count = (uint)(BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(12))
                     + BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(14)));
                 if ((ulong)offset + 16 + count * 8 > resources.Size)
                     throw new BadImageFormatException("Resource entries exceed directory bounds.");
                 for (uint index = 0; index < count; index++)
                 {
-                    uint target = pe.ReadU32(resources.RelativeVirtualAddress + offset + 20 + index * 8);
+                    uint target = pe.ReadU32(checked(resources.RelativeVirtualAddress + offset + 20 + index * 8));
                     if ((target & 0x80000000) != 0) pending.Push(target & 0x7fffffff);
                     else
                     {
                         if ((ulong)target + 16 > resources.Size) throw new BadImageFormatException("Resource data entry exceeds directory bounds.");
-                        uint at = resources.RelativeVirtualAddress + target;
+                        uint at = checked(resources.RelativeVirtualAddress + target);
                         ranges.Add((pe.ReadU32(at), checked((int)pe.ReadU32(at + 4))));
                     }
                 }
@@ -268,25 +336,31 @@ internal static class StringCandidates
             .Any(index => !pe.Directory(index).IsEmpty))
             foreach (PeImage.Section section in pe.Sections.Where(value => !value.IsExecutable)) ExcludeSection(section.VirtualAddress);
         DataDirectory imports = pe.Directory(DataDir.Import);
-        for (uint offset = 0; (ulong)offset + 20 <= imports.Size; offset += 20)
+        if (!imports.IsEmpty && imports.RelativeVirtualAddress != 0)
         {
-            byte[] descriptor = pe.ReadRva(imports.RelativeVirtualAddress + offset, 20);
-            if (descriptor.All(value => value == 0)) break;
-            uint lookup = BinaryPrimitives.ReadUInt32LittleEndian(descriptor);
-            uint name = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(12));
-            uint iat = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(16));
-            ranges.Add((name, pe.ReadCString(name).Length + 1));
-            if (lookup == 0) lookup = iat;
-            for (uint slot = 0; slot < 65536; slot++)
+            for (uint offset = 0; (ulong)offset + 20 <= imports.Size; offset += 20)
             {
-                ranges.Add((checked(lookup + slot * 8), 8));
-                ranges.Add((checked(iat + slot * 8), 8));
-                ulong entry = pe.ReadU64(checked(lookup + slot * 8));
-                if (entry == 0) break;
-                if ((entry & (1UL << 63)) == 0)
+                byte[] descriptor = pe.ReadRva(checked(imports.RelativeVirtualAddress + offset), 20);
+                uint lookup = BinaryPrimitives.ReadUInt32LittleEndian(descriptor);
+                uint name = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(12));
+                uint iat = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(16));
+                if (lookup == 0 && name == 0 && iat == 0) break;
+                if (name == 0 || iat == 0) break;
+                ranges.Add((name, pe.ReadCStringByteLength(name) + 1));
+                if (lookup == 0) lookup = iat;
+                for (uint slot = 0; slot < 65536; slot++)
                 {
-                    uint hintName = checked((uint)entry);
-                    ranges.Add((hintName, pe.ReadCString(checked(hintName + 2)).Length + 3));
+                    uint lookupSlot = checked(lookup + slot * 8);
+                    uint iatSlot = checked(iat + slot * 8);
+                    ranges.Add((lookupSlot, 8));
+                    ranges.Add((iatSlot, 8));
+                    ulong entry = pe.ReadU64(lookupSlot);
+                    if (entry == 0) break;
+                    if ((entry & (1UL << 63)) == 0)
+                    {
+                        uint hintName = checked((uint)entry);
+                        ranges.Add((hintName, pe.ReadCStringByteLength(checked(hintName + 2)) + 3));
+                    }
                 }
             }
         }
@@ -299,7 +373,127 @@ internal static class StringCandidates
         }
         void ExcludeString(uint rva)
         {
-            if (rva != 0) ranges.Add((rva, pe.ReadCString(rva).Length + 1));
+            if (rva != 0) ranges.Add((rva, pe.ReadCStringByteLength(rva) + 1));
+        }
+    }
+
+    private static void ExcludeUnwindChain(
+        PeImage pe,
+        uint unwindRva,
+        List<(uint Start, int Length)> ranges,
+        Action<uint> excludeSection)
+    {
+        for (int depth = 0; depth < 16; depth++)
+        {
+            if (unwindRva == 0)
+                return;
+            // Bit 0 indicates RUNTIME_FUNCTION_INDIRECT pointing at another 12-byte RUNTIME_FUNCTION.
+            if ((unwindRva & 1) != 0)
+            {
+                uint targetEntry = unwindRva & ~1u;
+                if (!pe.TryRvaToOffset(targetEntry, out _) || !pe.TryRvaToOffset(checked(targetEntry + 11), out _))
+                {
+                    excludeSection(targetEntry);
+                    return;
+                }
+                ranges.Add((targetEntry, 12));
+                unwindRva = pe.ReadU32(checked(targetEntry + 8));
+                continue;
+            }
+            if (!pe.TryRvaToOffset(unwindRva, out _) || !pe.TryRvaToOffset(checked(unwindRva + 3), out _))
+            {
+                excludeSection(unwindRva);
+                return;
+            }
+            byte[] header = pe.ReadRva(unwindRva, 4);
+            byte flags = (byte)(header[0] >> 3);
+            int codesBytes = ((header[2] + 1) & ~1) * 2;
+            int totalBytes = 4 + codesBytes;
+            bool chained = (flags & 0x04) != 0;
+            bool hasHandler = !chained && (flags & 0x03) != 0;
+            if (chained)
+                totalBytes += 12;
+            else if (hasHandler)
+                totalBytes += 4;
+            ranges.Add((unwindRva, totalBytes));
+            if (!chained)
+                return;
+            uint chainedEntryRva = checked(unwindRva + (uint)(4 + codesBytes));
+            if (!pe.TryRvaToOffset(checked(chainedEntryRva + 11), out _))
+                return;
+            unwindRva = pe.ReadU32(checked(chainedEntryRva + 8));
+        }
+    }
+
+    private static void ExcludeLoadConfig(
+        PeImage pe,
+        DataDirectory loadConfig,
+        List<(uint Start, int Length)> ranges,
+        Action<uint> excludeSection)
+    {
+        PeImage.Section? section = pe.SectionFromRva(loadConfig.RelativeVirtualAddress);
+        if (section is null)
+            return;
+        uint declaredSize = pe.ReadU32(loadConfig.RelativeVirtualAddress);
+        uint maxAvail = checked(section.SizeOfRawData - (loadConfig.RelativeVirtualAddress - section.VirtualAddress));
+        uint effectiveSize = Math.Min(Math.Max(loadConfig.Size, declaredSize), maxAvail);
+        if (effectiveSize > int.MaxValue)
+        {
+            excludeSection(loadConfig.RelativeVirtualAddress);
+            return;
+        }
+        ranges.Add((loadConfig.RelativeVirtualAddress, (int)effectiveSize));
+
+        // Guard flags tell us whether table entries carry extra stride metadata bytes.
+        uint guardFlags = effectiveSize >= 0x94
+            ? pe.ReadU32(checked(loadConfig.RelativeVirtualAddress + 0x90))
+            : 0;
+        int extraStride = (int)((guardFlags >> 28) & 0xF);
+        int entryStride = 4 + extraStride;
+
+        // Exclude known pointer targets and counted tables referenced by IMAGE_LOAD_CONFIG_DIRECTORY64.
+        ExcludePointerSlot(0x40, 8);  // LockPrefixTable
+        ExcludePointerSlot(0x58, 8);  // SecurityCookie
+        ExcludeCountedTable(0x60, 0x68, 4); // SEHandlerTable (rare on x64)
+        ExcludePointerSlot(0x70, 8);  // GuardCFCheckFunctionPointer
+        ExcludePointerSlot(0x78, 8);  // GuardCFDispatchFunctionPointer
+        ExcludeCountedTable(0x80, 0x88, entryStride); // GuardCFFunctionTable
+        ExcludeCountedTable(0xA0, 0xA8, entryStride); // GuardAddressTakenIatEntryTable
+        ExcludeCountedTable(0xB0, 0xB8, entryStride); // GuardLongJumpTargetTable
+        ExcludePointerSlot(0xC0, 8);  // DynamicValueRelocTable
+        ExcludePointerSlot(0xC8, 8);  // CHPEMetadataPointer
+        ExcludePointerSlot(0xD0, 8);  // GuardRFFailureRoutine
+        ExcludePointerSlot(0xD8, 8);  // GuardRFFailureRoutineFunctionPointer
+        ExcludePointerSlot(0x100, 8); // GuardXFGCheckFunctionPointer
+        ExcludePointerSlot(0x108, 8); // GuardXFGDispatchFunctionPointer
+        ExcludePointerSlot(0x110, 8); // GuardXFGTableDispatchFunctionPointer
+        ExcludePointerSlot(0x118, 8); // CastGuardOsDeterminedFailureMode
+        ExcludePointerSlot(0x120, 8); // GuardMemcpyFunctionPointer
+        ExcludeCountedTable(0xF0, 0xF8, entryStride); // GuardEHContinuationTable
+
+        void ExcludePointerSlot(uint fieldOffset, int bytes)
+        {
+            if ((ulong)fieldOffset + 8 > effectiveSize)
+                return;
+            ulong va = pe.ReadU64(checked(loadConfig.RelativeVirtualAddress + fieldOffset));
+            if (va >= pe.ImageBase && va - pe.ImageBase < pe.SizeOfImage)
+                ranges.Add(((uint)(va - pe.ImageBase), bytes));
+        }
+
+        void ExcludeCountedTable(uint tableOffset, uint countOffset, int stride)
+        {
+            if ((ulong)countOffset + 8 > effectiveSize)
+                return;
+            ulong tableVa = pe.ReadU64(checked(loadConfig.RelativeVirtualAddress + tableOffset));
+            ulong count = pe.ReadU64(checked(loadConfig.RelativeVirtualAddress + countOffset));
+            if (tableVa < pe.ImageBase || tableVa - pe.ImageBase >= pe.SizeOfImage || count == 0)
+                return;
+            ulong total = count > (ulong)(int.MaxValue / Math.Max(1, stride)) ? ulong.MaxValue : count * (ulong)stride;
+            uint rva = (uint)(tableVa - pe.ImageBase);
+            if (total > int.MaxValue)
+                excludeSection(rva);
+            else
+                ranges.Add((rva, (int)total));
         }
     }
 }

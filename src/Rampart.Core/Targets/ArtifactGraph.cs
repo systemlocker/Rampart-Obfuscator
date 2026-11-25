@@ -28,7 +28,10 @@ public sealed record ArtifactGraph(string Primary, IReadOnlyList<ArtifactNode> A
     {
         string fullPath = Path.GetFullPath(inputPath);
         string directory = Path.GetDirectoryName(fullPath)!;
-        string basename = Path.GetFileNameWithoutExtension(fullPath);
+        string extension = Path.GetExtension(fullPath);
+        string basename = extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) || extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileNameWithoutExtension(fullPath)
+            : Path.GetFileName(fullPath);
         var nodes = new Dictionary<string, ArtifactNode>(StringComparer.OrdinalIgnoreCase);
         long totalBytes = 0;
 
@@ -66,29 +69,36 @@ public sealed record ArtifactGraph(string Primary, IReadOnlyList<ArtifactNode> A
                 metadataPath = application;
             }
         }
-        using var stream = File.OpenRead(metadataPath);
-        using var reader = new PEReader(stream);
-        if (reader.HasMetadata)
+        try
         {
-            var metadata = reader.GetMetadataReader();
-            if (metadata.AssemblyReferences.Count > 4096)
-                throw new BadImageFormatException("RP_ARTIFACT_LIMIT: Too many assembly references.");
-            foreach (var handle in metadata.AssemblyReferences)
+            using var stream = File.OpenRead(metadataPath);
+            using var reader = new PEReader(stream);
+            if (reader.HasMetadata)
             {
-                string name = metadata.GetString(metadata.GetAssemblyReference(handle).Name);
-                // Assembly names are metadata, not paths supplied to a resolver.
-                if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name is "." or "..")
-                    throw new BadImageFormatException("RP_ASSEMBLY_NAME: Invalid assembly reference name.");
-                Add(Path.Combine(directory, name + ".dll"), "dependency");
+                var metadata = reader.GetMetadataReader();
+                if (metadata.AssemblyReferences.Count > 4096)
+                    throw new BadImageFormatException("RP_ARTIFACT_LIMIT: Too many assembly references.");
+                foreach (var handle in metadata.AssemblyReferences)
+                {
+                    string name = metadata.GetString(metadata.GetAssemblyReference(handle).Name);
+                    // Assembly names are metadata, not paths supplied to a resolver.
+                    if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name is "." or "..")
+                        throw new BadImageFormatException("RP_ASSEMBLY_NAME: Invalid assembly reference name.");
+                    Add(Path.Combine(directory, name + ".dll"), "dependency");
+                }
+                int directories = 0;
+                foreach (string child in Directory.EnumerateDirectories(directory))
+                {
+                    if (++directories > 4096)
+                        throw new BadImageFormatException("RP_ARTIFACT_LIMIT: Too many adjacent directories.");
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0) continue;
+                    Add(Path.Combine(child, basename + ".resources.dll"), "satellite-resource");
+                }
             }
-            int directories = 0;
-            foreach (string child in Directory.EnumerateDirectories(directory))
-            {
-                if (++directories > 4096)
-                    throw new BadImageFormatException("RP_ARTIFACT_LIMIT: Too many adjacent directories.");
-                if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0) continue;
-                Add(Path.Combine(child, basename + ".resources.dll"), "satellite-resource");
-            }
+        }
+        catch (BadImageFormatException error) when (!error.Message.StartsWith("RP_", StringComparison.Ordinal))
+        {
+            // Non-PE or malformed inputs still produce a bounded primary artifact inventory.
         }
         return new(Path.GetFileName(fullPath), nodes.Values.OrderBy(n => n.RelativePath, StringComparer.Ordinal).ToArray(), signingInstructions);
     }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Rampart.Config;
 using Rampart.Pe;
@@ -16,7 +17,7 @@ public sealed record FunctionDescriptor(
     string Section,
     string? Source)
 {
-    public uint Size => EndRva - BeginRva;
+    public uint Size => EndRva >= BeginRva ? EndRva - BeginRva : 0u;
 
     public static List<FunctionDescriptor> Attach(
         PeImage pe,
@@ -24,17 +25,16 @@ public sealed record FunctionDescriptor(
         IEnumerable<SymbolRecord> symbols)
     {
         SymbolRecord[] orderedSymbols = symbols.OrderBy(symbol => symbol.StartRva).ToArray();
-        return functions.Select(function =>
+        var result = new List<FunctionDescriptor>();
+        foreach (RuntimeFunction function in functions)
         {
-            SymbolRecord? symbol = orderedSymbols
-                .Where(candidate => candidate.StartRva >= function.BeginRva && candidate.StartRva < function.EndRva)
-                .OrderBy(candidate => candidate.StartRva == function.BeginRva ? 0 : 1)
-                .ThenBy(candidate => candidate.StartRva)
-                .FirstOrDefault();
+            if (function.EndRva < function.BeginRva)
+                continue;
+            SymbolRecord? symbol = FindBestSymbol(orderedSymbols, function.BeginRva, function.EndRva);
             string name = symbol?.Name ?? $"sub_{function.BeginRva:X8}";
             int separator = name.LastIndexOf("::", StringComparison.Ordinal);
             string symbolNamespace = separator > 0 ? name[..separator] : "";
-            return new FunctionDescriptor(
+            result.Add(new FunctionDescriptor(
                 function.BeginRva,
                 function.EndRva,
                 function.UnwindRva,
@@ -42,14 +42,37 @@ public sealed record FunctionDescriptor(
                 symbolNamespace,
                 symbol?.Module,
                 pe.SectionFromRva(function.BeginRva)?.Name ?? "",
-                symbol?.Source);
-        }).ToList();
+                symbol?.Source));
+        }
+        return result;
+    }
+
+    private static SymbolRecord? FindBestSymbol(SymbolRecord[] orderedSymbols, uint beginRva, uint endRva)
+    {
+        if (orderedSymbols.Length == 0)
+            return null;
+        // Binary search for the first symbol with StartRva >= beginRva (O(log S)).
+        int low = 0, high = orderedSymbols.Length;
+        while (low < high)
+        {
+            int mid = low + (high - low) / 2;
+            if (orderedSymbols[mid].StartRva < beginRva)
+                low = mid + 1;
+            else
+                high = mid;
+        }
+        if (low >= orderedSymbols.Length || orderedSymbols[low].StartRva >= endRva)
+            return null;
+        // Because symbols are sorted by StartRva, the first entry at/after
+        // beginRva automatically prefers an exact BeginRva match, then lowest RVA.
+        return orderedSymbols[low];
     }
 }
 
 /// <summary>Resolves global settings and ordered region rules for one function.</summary>
 public sealed class FunctionPolicy
 {
+    private static readonly ConcurrentDictionary<string, Regex> GlobCache = new(StringComparer.Ordinal);
     private readonly ProtectionSettings _settings;
     private readonly KnobCatalog _catalog;
 
@@ -96,8 +119,12 @@ public sealed class FunctionPolicy
         return level;
     }
 
-    public ProtectionLevel MaximumLevel(string knobId, IEnumerable<FunctionDescriptor> functions) =>
-        functions.Select(function => Level(knobId, function)).DefaultIfEmpty(ProtectionLevel.Off).Max();
+    public ProtectionLevel MaximumLevel(string knobId, IEnumerable<FunctionDescriptor> functions)
+    {
+        if (!ProtectionCapabilities.FunctionScopedKnobs.Contains(knobId))
+            return _settings.LevelOf(_catalog.Get(knobId));
+        return functions.Select(function => Level(knobId, function)).DefaultIfEmpty(ProtectionLevel.Off).Max();
+    }
 
     /// <summary>Native body replacement requires an explicit function boundary
     /// selection in addition to an enabled knob. Merely increasing a global
@@ -160,12 +187,16 @@ public sealed class FunctionPolicy
             return false;
         // Normalize build paths so one policy works with MSVC backslashes,
         // GNU MAP forward slashes, and JSON produced on either host OS.
-        pattern = pattern.Replace('\\', '/');
-        value = value.Replace('\\', '/');
-        string regex = "^" + Regex.Escape(pattern)
-            .Replace("\\*", ".*", StringComparison.Ordinal)
-            .Replace("\\?", ".", StringComparison.Ordinal) + "$";
-        return Regex.IsMatch(value, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-            TimeSpan.FromMilliseconds(250));
+        string normalizedPattern = pattern.Replace('\\', '/');
+        string normalizedValue = value.Replace('\\', '/');
+        Regex compiled = GlobCache.GetOrAdd(normalizedPattern, static p =>
+        {
+            string regex = "^" + Regex.Escape(p)
+                .Replace("\\*", ".*", StringComparison.Ordinal)
+                .Replace("\\?", ".", StringComparison.Ordinal) + "$";
+            return new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+                TimeSpan.FromMilliseconds(250));
+        });
+        return compiled.IsMatch(normalizedValue);
     }
 }

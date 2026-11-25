@@ -21,14 +21,33 @@ public static partial class LeafControlFlowCompiler
         reason = "";
         if (source.Length is < 5 or > 512)
             return Fail("function size is outside the 5..512-byte limit", out reason);
+        // Decode forward so trailing 0x90/0xCC alignment bytes after the final RET
+        // are stripped cleanly without misinterpreting immediate bytes inside instructions.
         var instructions = new List<Instruction>();
+        int decodedEnd = 0;
         for (int offset = 0; offset < source.Length;)
         {
-            if (!TryDecode(source, offset, out var instruction))
-                return Fail($"unsupported or truncated instruction at +0x{offset:X}", out reason);
-            instructions.Add(instruction!);
-            offset = instruction!.End;
+            if (TryDecode(source, offset, out var instruction))
+            {
+                instructions.Add(instruction!);
+                offset = instruction!.End;
+                decodedEnd = offset;
+                continue;
+            }
+            if (instructions.Count > 0 && instructions[^1].Kind == Kind.Return
+                && IsTrailingPadding(source[offset..]))
+                break;
+            return Fail($"unsupported or truncated instruction at +0x{offset:X}", out reason);
         }
+        // Trim any trailing decoded NOPs after a final RET (linker padding).
+        while (instructions.Count > 1 && instructions[^1].Kind == Kind.Plain
+            && instructions[^1].Bytes.Length == 1 && instructions[^1].Bytes[0] == 0x90
+            && instructions[^2].Kind == Kind.Return)
+        {
+            instructions.RemoveAt(instructions.Count - 1);
+            decodedEnd = instructions[^1].End;
+        }
+        source = source[..decodedEnd];
         var starts = instructions.Select(i => i.Offset).ToHashSet();
         var leaders = new SortedSet<int> { 0 };
         foreach (var instruction in instructions)
@@ -144,6 +163,14 @@ public static partial class LeafControlFlowCompiler
 
     private static void State(Asm asm, uint state) => asm.Db(0x41, 0xBA).Dd(state); // mov r10d, imm32
     private static bool Fail(string message, out string reason) { reason = message; return false; }
+
+    private static bool IsTrailingPadding(ReadOnlySpan<byte> tail)
+    {
+        foreach (byte b in tail)
+            if (b is not (0x90 or 0xCC))
+                return false;
+        return true;
+    }
 
     // This is an allowlist decoder, not a length guesser. In particular prefixes,
     // memory operands, ADC/SBB, partial registers, and instructions touching RSP

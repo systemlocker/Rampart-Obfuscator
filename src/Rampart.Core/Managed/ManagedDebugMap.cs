@@ -47,7 +47,7 @@ internal sealed class ManagedDebugMap
                 && actual.StartLine == point.StartLine && actual.StartColumn == point.StartColumn && actual.EndLine == point.EndLine && actual.EndColumn == point.EndColumn))
                 ManagedPreflight.Fail("MANAGED_SYMBOL_MAP_INVALID", "An emitted sequence point differs from its recorded source mapping.");
             string status = !symbolsWritten ? "symbols-omitted" : offset is not null ? "mapped"
-                : owner == "managed-vm" ? "removed-by-virtualization" : "unmapped-source-offset";
+                : owner is "managed-vm" or "managed-hardened-vm" ? "removed-by-virtualization" : "unmapped-source-offset";
             return new ManagedSequencePointMapping(originalToken, emitted.MetadataToken.ToInt32(), point.Offset, offset,
                 point.OriginalDocument, document, point.StartLine, point.StartColumn, point.EndLine, point.EndColumn, status);
         }).ToArray();

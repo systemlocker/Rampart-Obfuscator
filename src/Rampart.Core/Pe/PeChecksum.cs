@@ -14,6 +14,9 @@ public static class PeChecksum
         if (pe < 64 || checksumOffset + 4 > file.Length
             || BinaryPrimitives.ReadUInt32LittleEndian(file[pe..]) != PeImage.PeSignature)
             throw new BadImageFormatException("Invalid PE header for checksum.");
+        ushort sizeOfOptionalHeader = BinaryPrimitives.ReadUInt16LittleEndian(file[(pe + 20)..]);
+        if (sizeOfOptionalHeader < 68)
+            throw new BadImageFormatException("Optional header is too small to contain the CheckSum field.");
         uint sum = 0;
         for (int index = 0; index < file.Length; index += 2)
         {

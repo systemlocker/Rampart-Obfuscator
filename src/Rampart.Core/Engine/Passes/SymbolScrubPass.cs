@@ -16,19 +16,27 @@ public sealed class SymbolScrubPass
         var pe = ctx.Pe;
         int items = 0;
 
-        // Debug directory + everything it points at (CODEVIEW RSD records carry
-        // the PDB path — the single most identifying string in a release build).
+        // Debug directory + payloads (CODEVIEW RSDS records carry the PDB path —
+        // the single most identifying string in a release build). Preserve loader
+        // security descriptors such as IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS (CET).
         var debugDir = pe.Directory(DataDir.Debug);
         if (!debugDir.IsEmpty)
         {
-            int count = (int)(debugDir.Size / 28);
+            int count = checked((int)(debugDir.Size / 28));
+            var preserved = new List<byte[]>();
             for (int i = 0; i < count; i++)
             {
-                var desc = pe.ReadRva(debugDir.RelativeVirtualAddress + (uint)(i * 28), 28);
+                var desc = pe.ReadRva(checked(debugDir.RelativeVirtualAddress + (uint)(i * 28)), 28);
+                uint type = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(12));
+                if (type == ExtendedDllCharacteristicsEditor.ImageDebugTypeExtendedDllCharacteristics)
+                {
+                    preserved.Add(desc);
+                    continue;
+                }
                 uint sizeOfData = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(16));
                 uint addressOfRawData = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(20));
                 uint pointerToRawData = BinaryPrimitives.ReadUInt32LittleEndian(desc.AsSpan(24));
-                if (sizeOfData > 0 && sizeOfData < 0x100000)
+                if (sizeOfData > 0 && sizeOfData <= int.MaxValue)
                 {
                     bool cleared = false;
                     if (addressOfRawData != 0
@@ -50,10 +58,21 @@ public sealed class SymbolScrubPass
                         items++;
                 }
             }
-            // Zero the descriptors themselves, then the directory entry.
-            ZeroRva(pe, debugDir.RelativeVirtualAddress, (int)debugDir.Size);
-            pe.SetDirectory(DataDir.Debug, 0, 0);
-            items++;
+            // Zero the entire original descriptor array, then compact any preserved
+            // loader security descriptors back into the start of the directory.
+            ZeroRva(pe, debugDir.RelativeVirtualAddress, checked((int)debugDir.Size));
+            if (preserved.Count > 0)
+            {
+                for (int i = 0; i < preserved.Count; i++)
+                    pe.WriteRva(checked(debugDir.RelativeVirtualAddress + (uint)(i * 28)), preserved[i]);
+                pe.SetDirectory(DataDir.Debug, debugDir.RelativeVirtualAddress, checked((uint)(preserved.Count * 28)));
+            }
+            else
+            {
+                pe.SetDirectory(DataDir.Debug, 0, 0);
+            }
+            if (preserved.Count < count)
+                items++;
         }
 
         // Rich header: scrub immediately so the later disguise pass can place
@@ -88,13 +107,21 @@ public sealed class SymbolScrubPass
                 ZeroRva(pe, export.RelativeVirtualAddress + 4, 4);
 
             var imports = pe.Directory(DataDir.Import);
+            bool clearedNewStyleBound = false;
             for (uint offset = 0; !imports.IsEmpty && (ulong)offset + 20 <= imports.Size; offset += 20)
             {
-                byte[] descriptor = pe.ReadRva(imports.RelativeVirtualAddress + offset, 20);
+                byte[] descriptor = pe.ReadRva(checked(imports.RelativeVirtualAddress + offset), 20);
                 if (descriptor.All(value => value == 0))
                     break;
-                ZeroRva(pe, imports.RelativeVirtualAddress + offset + 4, 4);
+                uint ts = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(4));
+                if (ts == uint.MaxValue)
+                    clearedNewStyleBound = true;
+                ZeroRva(pe, checked(imports.RelativeVirtualAddress + offset + 4), 4);
             }
+            // If new-style bound-import timestamps (0xFFFFFFFF) were cleared, also
+            // clear the companion BoundImport directory so loader state stays consistent.
+            if (clearedNewStyleBound && !pe.Directory(DataDir.BoundImport).IsEmpty)
+                pe.SetDirectory(DataDir.BoundImport, 0, 0);
             items++;
         }
 

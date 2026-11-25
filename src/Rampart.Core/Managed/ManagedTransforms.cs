@@ -67,6 +67,7 @@ internal static class ManagedTransforms
             il.InsertAfter(instruction, mask);
             il.InsertAfter(mask, Instruction.Create(OpCodes.Xor));
         }
+        if (count > 0) ManagedIlVerifier.UpdateMaxStackSize(method);
         return count;
     }
 
@@ -94,6 +95,7 @@ internal static class ManagedTransforms
                 Instruction.Create(OpCodes.Ldc_I4, key), Instruction.Create(OpCodes.Ldsflda, cache), Instruction.Create(OpCodes.Call, helper) })
             { il.InsertAfter(previous, next); previous = next; }
         }
+        if (count > 0) ManagedIlVerifier.UpdateMaxStackSize(method);
         return count;
     }
 
@@ -101,7 +103,7 @@ internal static class ManagedTransforms
     {
         var body = method.Body;
         if (method.IsConstructor || body.HasExceptionHandlers || body.Instructions.Count < 3
-            || body.Variables.Any(variable => variable.VariableType.IsByReference || variable.VariableType.IsPointer)
+            || body.Variables.Any(variable => ManagedIlVerifier.StackType(variable.VariableType) is ByReferenceType or PointerType)
             || body.Instructions.Any(instruction => instruction.OpCode.OpCodeType == OpCodeType.Prefix
                 || instruction.OpCode.Code is Code.Calli or Code.Jmp or Code.Localloc or Code.Leave or Code.Leave_S)
             || !ManagedFlowAnalysis.TryHeights(method, out var heights, out _)) return false;
@@ -174,6 +176,7 @@ internal static class ManagedTransforms
         method.DebugInformation.SequencePoints.Clear();
         foreach (var point in points) method.DebugInformation.SequencePoints.Add(point);
         method.DebugInformation.Scope = null;
+        ManagedIlVerifier.UpdateMaxStackSize(method);
         return true;
     }
 
@@ -202,6 +205,7 @@ internal static class ManagedTransforms
             { il.Emit(OpCodes.Dup); il.Emit(OpCodes.Ldc_I4, parameter.Index); il.Emit(OpCodes.Ldarg, parameter); il.Emit(OpCodes.Stelem_I4); }
         }
         il.Emit(OpCodes.Call, helper); il.Emit(OpCodes.Ret);
+        ManagedIlVerifier.UpdateMaxStackSize(method);
         return true;
     }
 }

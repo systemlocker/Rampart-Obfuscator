@@ -5,7 +5,7 @@ namespace Rampart.Managed;
 
 internal static class ManagedMetadataBounds
 {
-    internal static void Validate(ReadOnlySpan<byte> metadata, ManagedProtectionOptions options)
+    internal static void Validate(ReadOnlySpan<byte> metadata, ManagedProtectionOptions options, bool portablePdb = false)
     {
         if (metadata.Length < 20 || BinaryPrimitives.ReadUInt32LittleEndian(metadata) != 0x424a5342) Fail();
         var versionLength = BinaryPrimitives.ReadInt32LittleEndian(metadata[12..]);
@@ -15,6 +15,10 @@ internal static class ManagedMetadataBounds
         var streams = BinaryPrimitives.ReadUInt16LittleEndian(metadata[(position + 2)..]); position += 4;
         if (streams is < 1 or > 16) Fail();
         var names = new HashSet<string>(StringComparer.Ordinal); var ranges = new List<(int Start, int Length)>();
+        // Portable PDB #~ streams use debug table indices 0x30..0x37 (bits 48..55)
+        // in addition to ECMA-335 type-system table indices 0x00..0x2C (bits 0..44).
+        ulong allowedTables = portablePdb ? (((1UL << 45) - 1) | (0xFFUL << 48)) : ((1UL << 45) - 1);
+        int maxTableIndex = portablePdb ? 56 : 45;
         for (var stream = 0; stream < streams; stream++)
         {
             if (position > metadata.Length - 12) Fail();
@@ -31,9 +35,9 @@ internal static class ManagedMetadataBounds
                 var table = metadata.Slice(offset, size);
                 if (table.Length < 24) Fail();
                 var valid = BinaryPrimitives.ReadUInt64LittleEndian(table[8..]);
-                if ((valid >> 45) != 0) Fail();
+                if ((valid & ~allowedTables) != 0) Fail();
                 var cursor = 24; long rows = 0;
-                for (var index = 0; index < 45; index++)
+                for (var index = 0; index < maxTableIndex; index++)
                 {
                     if ((valid & (1UL << index)) == 0) continue;
                     if (cursor > table.Length - 4) Fail();
@@ -42,6 +46,10 @@ internal static class ManagedMetadataBounds
                 }
             }
         }
+        if (!names.Contains("#~") && !names.Contains("#-")) Fail();
+        // ECMA-335 CLI assemblies require #Strings, #GUID, and #Blob heaps; Mono.Cecil
+        // dereferences those heap tables unconditionally when reading module metadata.
+        if (!portablePdb && (!names.Contains("#Strings") || !names.Contains("#GUID") || !names.Contains("#Blob"))) Fail();
         foreach (var range in ranges) if (range.Start < position) Fail();
         var ordered = ranges.OrderBy(r => r.Start).ToArray();
         for (var i = 1; i < ordered.Length; i++) if (ordered[i].Start < ordered[i - 1].Start + ordered[i - 1].Length) Fail();

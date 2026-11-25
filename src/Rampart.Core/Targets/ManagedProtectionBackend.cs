@@ -42,9 +42,12 @@ public sealed class ManagedProtectionBackend : IProtectionBackend
                 method.Original.Module, method.Original.Type, method.Original.Signature, method.Original.MetadataToken);
             var updated = original with { Signature = method.ProtectedName, MetadataToken = method.ProtectedToken };
             foreach (string applied in method.Applied)
-                evidence.Add(new(applied, original, updated, "Light", EvidenceDisposition.Applied, "RP_APPLIED",
+            {
+                string normalized = applied is "rename-private-method" or "rename-internal-method" ? "rename" : applied;
+                evidence.Add(new(normalized, original, updated, "Light", EvidenceDisposition.Applied, "RP_APPLIED",
                     OriginalSize: method.OriginalIlSize, ProtectedSize: method.ProtectedIlSize,
                     OriginalHash: method.OriginalHash, ProtectedHash: method.ProtectedHash, VerificationStatus: method.VerificationStatus));
+            }
             foreach (string skipped in method.Skipped.Except(method.Rejected, StringComparer.Ordinal))
                 evidence.Add(new(skipped.Split(':')[0], original, updated, "Light", EvidenceDisposition.Skipped, skipped,
                     OriginalSize: method.OriginalIlSize, ProtectedSize: method.ProtectedIlSize,
@@ -91,37 +94,49 @@ public sealed class ManagedProtectionBackend : IProtectionBackend
             throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: NativeAOT options require a published native executable.");
         if (settings.IncludeRvaRanges.Count != 0 || settings.Rules.Any(r => r.Scope is ProtectionRuleScope.Rva or ProtectionRuleScope.Section))
             throw new NotSupportedException("RP_MANAGED_NATIVE_SELECTOR: RVA and section selectors apply only to native code.");
-        if (settings.SymbolSources.Count != 0 || settings.PdbTool is not null || settings.ThreatFocus.Count != 0)
-            throw new NotSupportedException("RP_MANAGED_NATIVE_OPTIONS: Native symbol sources and threat dials do not apply to managed IL.");
+        if (settings.SymbolSources.Count != 0 || settings.PdbTool is not null || settings.ThreatFocus.Count != 0 || settings.CustomMessage is not null)
+            throw new NotSupportedException("RP_MANAGED_NATIVE_OPTIONS: Native symbol sources, threat dials, and custom response messages do not apply to managed IL.");
         var options = settings.Targets?.Managed is { } source
             ? JsonSerializer.Deserialize<ManagedProtectionOptions>(JsonSerializer.Serialize(source, ProtectionSettingsJson.Options), ProtectionSettingsJson.Options)!
             : new ManagedProtectionOptions();
         options.StrictCompatibility |= settings.Targets?.Compatibility == CompatibilityPolicy.Strict;
         options.Watermark ??= settings.Watermark;
-        foreach (var knob in settings.Knobs.Where(k => k.Value != ProtectionLevel.Off))
+        foreach (var knob in settings.Knobs)
         {
-            if (knob.Value != ProtectionLevel.Light)
-                throw new NotSupportedException("RP_MANAGED_LEVEL: Managed protections currently accept Light only.");
+            if (!Enum.IsDefined(knob.Value))
+                throw new ArgumentException("RP_KNOB_LEVEL: Invalid protection level.");
+            if (knob.Value > ProtectionLevel.Light)
+                throw new NotSupportedException("RP_MANAGED_LEVEL: Managed protections currently accept Light or Off only.");
+            bool enabled = knob.Value != ProtectionLevel.Off;
             switch (knob.Key)
             {
-                case "strings.encryption": options.Strings = true; break;
-                case "code-transformation.mba-constants": options.Constants = true; break;
-                case "code-transformation.flattening": options.ControlFlow = true; break;
-                case "packaging.symbol-scrub": options.MetadataHygiene = true; break;
-                case "virtualization.coverage" or "virtualization.per-build-isa": options.Virtualize = true; break;
-                default: throw new NotSupportedException($"RP_TARGET_KNOB_UNSUPPORTED: '{knob.Key}' does not apply to managed IL.");
+                case "strings.encryption": options.Strings = enabled; break;
+                case "code-transformation.mba-constants": options.Constants = enabled; break;
+                case "code-transformation.flattening": options.ControlFlow = enabled; break;
+                case "packaging.symbol-scrub": options.MetadataHygiene = enabled; break;
+                case "virtualization.coverage" or "virtualization.per-build-isa":
+                    string partner = knob.Key == "virtualization.coverage" ? "virtualization.per-build-isa" : "virtualization.coverage";
+                    options.Virtualize = enabled || (settings.Knobs.TryGetValue(partner, out var partnerLevel) && partnerLevel != ProtectionLevel.Off);
+                    break;
+                default:
+                    if (enabled)
+                        throw new NotSupportedException($"RP_TARGET_KNOB_UNSUPPORTED: '{knob.Key}' does not apply to managed IL.");
+                    break;
             }
         }
 
-        var rules = new List<ManagedMethodRule>();
+        // Preserve original user-rule indices first, then apply synthetic IncludeSymbols,
+        // shared settings.Rules, and final ExcludeSymbols filters.
+        var rules = new List<ManagedMethodRule>(options.Rules);
         if (settings.IncludeSymbols.Count != 0)
         {
             rules.Add(new() { Include = false });
             rules.AddRange(settings.IncludeSymbols.Select(pattern => new ManagedMethodRule { Method = pattern, Include = true }));
         }
-        rules.AddRange(options.Rules);
         foreach (var rule in settings.Rules)
         {
+            if (string.IsNullOrWhiteSpace(rule.Match))
+                throw new ArgumentException("RP_RULE_SELECTOR: Rule match pattern cannot be empty.");
             var managed = new ManagedMethodRule();
             switch (rule.Scope)
             {
@@ -140,6 +155,8 @@ public sealed class ManagedProtectionBackend : IProtectionBackend
             }
             foreach (var knob in rule.Knobs)
             {
+                if (!Enum.IsDefined(knob.Value))
+                    throw new ArgumentException("RP_KNOB_LEVEL: Invalid protection level.");
                 if (knob.Value > ProtectionLevel.Light)
                     throw new NotSupportedException("RP_MANAGED_LEVEL: Managed rules currently accept Light or Off only.");
                 bool enabled = knob.Value != ProtectionLevel.Off;
@@ -161,7 +178,14 @@ public sealed class ManagedProtectionBackend : IProtectionBackend
 
     public void Validate(byte[] original, BackendProtectionResult result)
     {
-        ManagedBackend.ValidateInput(result.Output, new ManagedProtectionOptions { MaximumInputBytes = 268435456 });
+        ManagedBackend.ValidateInput(result.Output, new ManagedProtectionOptions
+        {
+            MaximumInputBytes = 268435456,
+            MaximumMethods = 200000,
+            MaximumMethodBytes = 4194304,
+            MaximumMetadataRows = 2000000,
+            MaximumOutputGrowthPercent = 1000,
+        });
         var classification = Inspect(result.Output);
         if (classification.Target.Kind is not (ProtectionTargetKind.ManagedIl or ProtectionTargetKind.AlreadyProtected))
             throw new BadImageFormatException("RP_MANAGED_OUTPUT: Output is no longer a pure-IL assembly.");

@@ -85,13 +85,13 @@ public sealed class StringProtectionPass
             $"encrypted {encrypted} strings in place with {decryptors} scoped decryptor(s)" +
             $" ({chosen.Count(item => item.UnitSize == 2)} UTF-16LE), {guarded} checked decryptor/table pair(s)" +
             (taint ? "; startup keys bound to shared session state" : "")));
-        if (ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
+        if (ctx.MaximumFunctionLevel("code-transformation.mba-constants") != Config.ProtectionLevel.Off)
             ctx.MarkApplied("code-transformation.mba-constants", Config.ProtectionLevel.Light);
     }
 
 
     /// <summary>Build-side encryption. Per byte i:
-    /// b ^= low byte of ror64(k1, 8*i); and (rolling layer)
+    /// b ^= low byte of rol64(k1, 8*i); and (rolling layer)
     /// b ^= low byte of (state >> 29) where state = state * P + i.</summary>
     internal static void EncryptAt(BuildContext ctx, uint rva, int len, ulong k1, ulong k2, bool rolling)
     {
@@ -117,20 +117,21 @@ public sealed class StringProtectionPass
 
     /// <summary>Emits the init routine that reverses the encryption in place.
     ///
-    /// Register plan: rbx = table cursor, r15 = runtime image base, rax = target
-    /// pointer, r12 = bytes remaining, r8 = rotated key (advance with rol 8),
-    /// r9 = current key byte, rdx = rolling state, r10 = byte index, r11 = P,
-    /// r14 = table mask, rcx = data byte (only CL is stored).
+    /// Register plan: rbx = table cursor, r15 = runtime image base, rbp = target
+    /// byte pointer, r12 = bytes remaining, rsi = currently writable 4KB page VA
+    /// (0 if none), edi = saved flOldProtect of rsi, r8 = rotated key (advance
+    /// with rol 8), r9 = current key byte, rdx = rolling state (Balanced+),
+    /// r10 = byte index (Balanced+), r11 = P (Balanced+), r14 = table mask,
+    /// rcx = data byte (only CL is stored).
     ///
-    /// The (rva, len, k1, k2) qword table rides at the end, XOR-masked with a
-    /// build value; a zero first field terminates the walk.
-    /// Emitted twice — once to measure size, once at the final RVA (only the
-    /// runtime-base immediate changes, so sizes match).</summary>
+    /// Page protections are coalesced across consecutive strings on the same 4KB
+    /// page and handled page-by-page across page boundaries so each page restores
+    /// its own original protection with at most 2 VirtualProtect calls per page.</summary>
     private static uint EmitDecryptor(BuildContext ctx, List<EncString> table, bool rolling,
         bool integrity, bool taint, RuntimeDetectionStateLayout? state, uint protectIat)
     {
         ulong mask = (ulong)ctx.Rng.NextInt64() | 0x1;
-        bool splitConstants = ctx.Level("code-transformation.mba-constants") != Config.ProtectionLevel.Off;
+        bool splitConstants = ctx.MaximumFunctionLevel("code-transformation.mba-constants") != Config.ProtectionLevel.Off;
         long maskSplit = ctx.Rng.NextInt64() | 1;
         long multiplierSplit = ctx.Rng.NextInt64() | 1;
         var blob = new byte[table.Count * 32 + 32]; // + terminator qwords
@@ -150,13 +151,21 @@ public sealed class StringProtectionPass
         foreach (byte value in blob) checksum = unchecked((checksum ^ value) * 1099511628211UL);
         if (integrity) RuntimeDetectionState.Enable(ctx, RuntimeDetectionKind.SentinelModified);
 
-        Asm Build(uint selfRva, ulong bodyChecksum)
+        AntiDebugPass.BuiltRoutine Build(uint selfRva, ulong bodyChecksum)
         {
             var a = new Asm();
-            a.PushR(Reg.Rbx); a.PushR(Reg.R12); a.PushR(Reg.R13); a.PushR(Reg.R14); a.PushR(Reg.R15);
-            // Five saves align the stack. Shadow space plus two DWORD protection
-            // slots keeps VirtualProtect ABI-correct without writable code pages.
-            a.SubRi(Reg.Rsp, 0x30);
+            // Eight nonvolatile saves leave RSP 8 mod 16; subtracting 0x48 bytes
+            // restores 16-byte alignment and provides shadow space (0x00..0x1F)
+            // plus local slots: +0x20 oldProtect, +0x24 scratch, +0x28 saved R8,
+            // +0x30 saved RDX, +0x38 saved R10, +0x40 saved nextPage.
+            var pushes = new List<(Reg, byte)>();
+            foreach (Reg reg in new[] { Reg.Rbx, Reg.Rbp, Reg.Rsi, Reg.Rdi, Reg.R12, Reg.R13, Reg.R14, Reg.R15 })
+            {
+                a.PushR(reg);
+                pushes.Add((reg, (byte)a.Position));
+            }
+            a.SubRi(Reg.Rsp, 0x48);
+            byte prologEnd = (byte)a.Position;
             a.LoadRuntimeBase(Reg.R15, selfRva);       // r15 = runtime image base
             if (state is not null) a.MovRi(Reg.R13, state.Rva).AddRr(Reg.R13, Reg.R15);
             if (integrity)
@@ -194,26 +203,26 @@ public sealed class StringProtectionPass
                 a.MovRiXorSplit(Reg.R14, unchecked((long)mask), Reg.Rax, maskSplit);
             else
                 a.MovRi(Reg.R14, unchecked((long)mask));
+            if (rolling)
+            {
+                if (splitConstants)
+                    a.MovRiXorSplit(Reg.R11, unchecked((long)RollingMultiplier), Reg.Rcx, multiplierSplit);
+                else
+                    a.MovRi(Reg.R11, unchecked((long)RollingMultiplier));
+            }
+            a.XorRr(Reg.Rsi, Reg.Rsi);                 // curPage = 0 (no page unprotected yet)
+            a.XorRr(Reg.Rdi, Reg.Rdi);                 // curOldProtect = 0
             a.LeaRip(Reg.Rbx, "tbl");
 
             a.Label("entry_loop");
-            a.MovRm(Reg.Rax, Reg.Rbx, 0);
-            a.XorRr(Reg.Rax, Reg.R14);                 // rax = target RVA
-            a.TestRr(Reg.Rax, Reg.Rax);
-            a.Jcc(Cc.E, "done");
-            a.AddRr(Reg.Rax, Reg.R15);                 // rax = target VA
+            a.MovRm(Reg.Rbp, Reg.Rbx, 0);
+            a.XorRr(Reg.Rbp, Reg.R14);                 // rbp = target RVA
+            a.TestRr(Reg.Rbp, Reg.Rbp);
+            a.Jcc(Cc.E, "restore_final_page");
+            a.AddRr(Reg.Rbp, Reg.R15);                 // rbp = target VA
 
             a.MovRm(Reg.R12, Reg.Rbx, 8);
             a.XorRr(Reg.R12, Reg.R14);                 // r12 = length
-            a.MovRr(Reg.Rcx, Reg.Rax).MovRr(Reg.Rdx, Reg.R12).MovRi(Reg.R8, 4);
-            a.LeaRd(Reg.R9, Reg.Rsp, 0x20);
-            a.MovRi(Reg.Rax, protectIat).AddRr(Reg.Rax, Reg.R15).CallMem(Reg.Rax);
-            a.TestRr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "done");
-            a.MovRm(Reg.Rax, Reg.Rbx).XorRr(Reg.Rax, Reg.R14).AddRr(Reg.Rax, Reg.R15);
-            if (splitConstants)
-                a.MovRiXorSplit(Reg.R11, unchecked((long)RollingMultiplier), Reg.Rcx, multiplierSplit);
-            else
-                a.MovRi(Reg.R11, unchecked((long)RollingMultiplier));
             a.MovRm(Reg.R8, Reg.Rbx, 16);
             a.XorRr(Reg.R8, Reg.R14);                  // r8 = rotated key
             if (taint)
@@ -221,14 +230,59 @@ public sealed class StringProtectionPass
                 a.MovRm(Reg.Rcx, Reg.R13, RuntimeDetectionStateLayout.SessionKeyOffset);
                 a.XorRr(Reg.R8, Reg.Rcx);
             }
-            a.MovRm(Reg.Rdx, Reg.Rbx, 24);
-            a.XorRr(Reg.Rdx, Reg.R14);                 // rdx = rolling state
-            a.XorRr(Reg.R10, Reg.R10);                 // byte index
+            if (rolling)
+            {
+                a.MovRm(Reg.Rdx, Reg.Rbx, 24);
+                a.XorRr(Reg.Rdx, Reg.R14);             // rdx = rolling state
+                a.XorRr(Reg.R10, Reg.R10);             // byte index
+            }
 
             a.Label("byte_loop");
             a.TestRr(Reg.R12, Reg.R12);
             a.Jcc(Cc.E, "next_entry");
-            a.MovRm8(Reg.Rcx, Reg.Rax, 0);             // only CL participates in the stored byte
+
+            // Fast path: check if the current byte is already on the open 4KB page.
+            a.MovRr(Reg.Rcx, Reg.Rbp);
+            a.AndRi(Reg.Rcx, unchecked((int)0xFFFFF000));
+            a.CmpRr(Reg.Rcx, Reg.Rsi);
+            a.Jcc(Cc.E, "page_ready");
+
+            // Slow path (once per distinct 4KB page): save volatile key state,
+            // restore the previous page's exact flOldProtect, and open the new page.
+            a.MovMr(Reg.Rsp, Reg.R8, 0x28);
+            if (rolling)
+            {
+                a.MovMr(Reg.Rsp, Reg.Rdx, 0x30);
+                a.MovMr(Reg.Rsp, Reg.R10, 0x38);
+            }
+            a.MovMr(Reg.Rsp, Reg.Rcx, 0x40);
+            a.TestRr(Reg.Rsi, Reg.Rsi).Jcc(Cc.E, "open_new_page");
+            a.MovRr(Reg.Rcx, Reg.Rsi).Mov32Ri(Reg.Rdx, 4096).Mov32Rr(Reg.R8, Reg.Rdi);
+            a.LeaRd(Reg.R9, Reg.Rsp, 0x24);
+            a.MovRi(Reg.Rax, protectIat).AddRr(Reg.Rax, Reg.R15).CallMem(Reg.Rax);
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "protect_fail");
+
+            a.Label("open_new_page");
+            a.MovRm(Reg.Rsi, Reg.Rsp, 0x40);
+            a.MovRr(Reg.Rcx, Reg.Rsi).Mov32Ri(Reg.Rdx, 4096).Mov32Ri(Reg.R8, 4); // PAGE_READWRITE
+            a.LeaRd(Reg.R9, Reg.Rsp, 0x20);
+            a.MovRi(Reg.Rax, protectIat).AddRr(Reg.Rax, Reg.R15).CallMem(Reg.Rax);
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.E, "protect_fail");
+            a.MovRm32(Reg.Rdi, Reg.Rsp, 0x20);
+
+            a.MovRm(Reg.R8, Reg.Rsp, 0x28);
+            if (rolling)
+            {
+                a.MovRm(Reg.Rdx, Reg.Rsp, 0x30);
+                a.MovRm(Reg.R10, Reg.Rsp, 0x38);
+                if (splitConstants)
+                    a.MovRiXorSplit(Reg.R11, unchecked((long)RollingMultiplier), Reg.Rcx, multiplierSplit);
+                else
+                    a.MovRi(Reg.R11, unchecked((long)RollingMultiplier));
+            }
+
+            a.Label("page_ready");
+            a.MovRm8(Reg.Rcx, Reg.Rbp, 0);             // only CL participates in the stored byte
             a.MovRr(Reg.R9, Reg.R8);
             a.AndRi(Reg.R9, 0xFF);
             a.XorRr(Reg.Rcx, Reg.R9);                  // layer 1
@@ -240,48 +294,60 @@ public sealed class StringProtectionPass
                 a.ShrRi(Reg.R9, 29);
                 a.AndRi(Reg.R9, 0xFF);
                 a.XorRr(Reg.Rcx, Reg.R9);              // layer 2
+                a.IncR(Reg.R10);
             }
-            a.MovMr8(Reg.Rax, Reg.Rcx, 0);
+            a.MovMr8(Reg.Rbp, Reg.Rcx, 0);
             a.RolRi(Reg.R8, 8);                        // next key byte into position
-            a.IncR(Reg.R10);
-            a.IncR(Reg.Rax);
+            a.IncR(Reg.Rbp);
             a.DecR(Reg.R12);
             a.Jmp("byte_loop");
 
             a.Label("next_entry");
-            // Restore the actual previous protection, including original RW
-            // storage. Sections never gain MemWrite merely to decrypt strings.
-            a.MovRm(Reg.Rcx, Reg.Rbx).XorRr(Reg.Rcx, Reg.R14).AddRr(Reg.Rcx, Reg.R15);
-            a.MovRm(Reg.Rdx, Reg.Rbx, 8).XorRr(Reg.Rdx, Reg.R14);
-            a.MovRm32(Reg.R8, Reg.Rsp, 0x20).LeaRd(Reg.R9, Reg.Rsp, 0x24);
-            a.MovRi(Reg.Rax, protectIat).AddRr(Reg.Rax, Reg.R15).CallMem(Reg.Rax);
             a.AddRi(Reg.Rbx, 32);
             a.Jmp("entry_loop");
 
+            a.Label("restore_final_page");
+            a.TestRr(Reg.Rsi, Reg.Rsi).Jcc(Cc.E, "body_end");
+            a.MovRr(Reg.Rcx, Reg.Rsi).Mov32Ri(Reg.Rdx, 4096).Mov32Rr(Reg.R8, Reg.Rdi);
+            a.LeaRd(Reg.R9, Reg.Rsp, 0x24);
+            a.MovRi(Reg.Rax, protectIat).AddRr(Reg.Rax, Reg.R15).CallMem(Reg.Rax);
+            a.Test32Rr(Reg.Rax, Reg.Rax).Jcc(Cc.Ne, "body_end");
+
+            a.Label("protect_fail");
+            // Fail closed if VirtualProtect fails so encrypted ciphertext never
+            // executes silently or triggers an arbitrary access violation later.
+            a.Mov32Ri(Reg.Rcx, 7); // FAST_FAIL_FATAL_APP_EXIT
+            a.Db(0xCD, 0x29);
+            a.Ud2();
+
             a.Label("body_end");
             a.Label("done");
-            a.AddRi(Reg.Rsp, 0x30);
-            a.PopR(Reg.R15); a.PopR(Reg.R14); a.PopR(Reg.R13); a.PopR(Reg.R12); a.PopR(Reg.Rbx);
+            a.AddRi(Reg.Rsp, 0x48);
+            a.PopR(Reg.R15); a.PopR(Reg.R14); a.PopR(Reg.R13); a.PopR(Reg.R12);
+            a.PopR(Reg.Rdi); a.PopR(Reg.Rsi); a.PopR(Reg.Rbp); a.PopR(Reg.Rbx);
             a.Ret();
+            int codeEnd = a.Position;
 
-            a.Align(8);
+            a.AlignData(8);
             a.Label("tbl");
             a.Db(blob);
-            return a;
+            return new AntiDebugPass.BuiltRoutine(a, codeEnd, AntiDebugPass.BuildUnwindInfo(pushes, 0x48, prologEnd));
         }
 
-        Asm template = Build(0, 0);
-        byte[] templateBytes = template.Assemble();
+        AntiDebugPass.BuiltRoutine template = Build(0, 0);
+        byte[] templateBytes = template.Assembler.Assemble();
         int size = templateBytes.Length;
         ulong bodyHash = 14695981039346656037UL;
-        foreach (byte value in templateBytes.AsSpan(template.LabelOffset("body_start"),
-            template.LabelOffset("body_end") - template.LabelOffset("body_start")))
+        foreach (byte value in templateBytes.AsSpan(template.Assembler.LabelOffset("body_start"),
+            template.Assembler.LabelOffset("body_end") - template.Assembler.LabelOffset("body_start")))
             bodyHash = unchecked((bodyHash ^ value) * 1099511628211UL);
         uint rva = ctx.Alloc(size, 16);
-        byte[] code = Build(rva, bodyHash).Assemble();
+        AntiDebugPass.BuiltRoutine built = Build(rva, bodyHash);
+        byte[] code = built.Assembler.Assemble();
         if (code.Length != size)
             throw new InvalidOperationException("Decryptor size shifted between passes.");
         ctx.WriteStub(rva, code);
+        ExceptionTableBuilder.Register(ctx, rva, checked(rva + (uint)built.CodeEnd), built.UnwindInfo!);
         return rva;
     }
 

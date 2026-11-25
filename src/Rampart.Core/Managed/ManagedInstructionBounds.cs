@@ -1,16 +1,21 @@
 using System.Buffers.Binary;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 
 namespace Rampart.Managed;
 
 internal static class ManagedInstructionBounds
 {
+    // Exclude Reflection.Emit internal prefix sentinels (Prefix1..Prefix7, Prefixref)
+    // which are not valid standalone CIL opcodes.
     private static readonly Dictionary<ushort, OperandType> Operands = typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(f => f.FieldType == typeof(OpCode)).Select(f => (OpCode)f.GetValue(null)!)
+        .Where(op => op.OpCodeType != OpCodeType.Nternal)
         .ToDictionary(op => unchecked((ushort)op.Value), op => op.OperandType);
 
-    internal static void Validate(byte[] bytes)
+    internal static HashSet<int> Validate(byte[] bytes, MetadataReader? metadata = null)
     {
         var offset = 0; var starts = new HashSet<int>(); var targets = new List<long>();
         while (offset < bytes.Length)
@@ -39,11 +44,20 @@ internal static class ManagedInstructionBounds
                 for (var i = 0; i < count; i++) targets.Add((long)end + BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset + i * 4)));
                 offset = end; continue;
             }
+            if (operand == OperandType.InlineString && metadata is not null)
+            {
+                // Validate ldstr user-string tokens against #US before Cecil decodes method
+                // bodies, since Cecil dereferences a missing #US heap without a null check.
+                var token = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset));
+                if ((token >>> 24) != 0x70 || metadata.GetHeapSize(HeapIndex.UserString) == 0) Fail();
+                _ = metadata.GetUserString(MetadataTokens.UserStringHandle(token));
+            }
             if (operand == OperandType.InlineBrTarget) targets.Add((long)offset + size + BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset)));
             else if (operand == OperandType.ShortInlineBrTarget) targets.Add((long)offset + size + (sbyte)bytes[offset]);
             offset += size;
         }
         foreach (var target in targets) if (target < 0 || target >= bytes.Length || !starts.Contains((int)target)) Fail();
+        return starts;
     }
     private static void Fail() => ManagedPreflight.Fail("MANAGED_INVALID_IL", "A method contains an invalid or unbounded IL operand.");
 }

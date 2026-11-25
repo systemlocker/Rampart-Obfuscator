@@ -11,7 +11,12 @@ public static class ExtendedDllCharacteristicsEditor
     public const ushort CetCompatible = 0x0001;
     private const int DebugDirectorySize = 28;
 
-    public static void Add(BuildContext ctx, ushort characteristics)
+    public static void Add(BuildContext ctx, ushort characteristics) =>
+        Add(ctx, (uint)characteristics);
+
+    /// <summary>Adds or updates the 32-bit IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS
+    /// flags record (DWORD per Windows PE specification).</summary>
+    public static void Add(BuildContext ctx, uint characteristics)
     {
         ArgumentNullException.ThrowIfNull(ctx);
         if (characteristics == 0)
@@ -26,9 +31,8 @@ public static class ExtendedDllCharacteristicsEditor
             int count = checked((int)(directory.Size / DebugDirectorySize));
             for (int i = 0; i < count; i++)
             {
-                byte[] descriptor = ctx.Pe.ReadRva(
-                    directory.RelativeVirtualAddress + (uint)(i * DebugDirectorySize),
-                    DebugDirectorySize);
+                uint descRva = checked(directory.RelativeVirtualAddress + checked((uint)(i * DebugDirectorySize)));
+                byte[] descriptor = ctx.Pe.ReadRva(descRva, DebugDirectorySize);
                 descriptors.Add(descriptor);
                 if (BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(12))
                     != ImageDebugTypeExtendedDllCharacteristics)
@@ -36,27 +40,51 @@ public static class ExtendedDllCharacteristicsEditor
 
                 uint dataRva = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(20));
                 uint size = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(16));
+                if (dataRva != 0 && size >= sizeof(uint))
+                {
+                    uint current = BinaryPrimitives.ReadUInt32LittleEndian(ctx.Pe.ReadRva(dataRva, sizeof(uint)));
+                    Span<byte> updated = stackalloc byte[sizeof(uint)];
+                    BinaryPrimitives.WriteUInt32LittleEndian(updated, current | characteristics);
+                    ctx.Pe.WriteRva(dataRva, updated);
+                    return;
+                }
                 if (dataRva != 0 && size >= sizeof(ushort))
                 {
-                    ushort current = BinaryPrimitives.ReadUInt16LittleEndian(ctx.Pe.ReadRva(dataRva, 2));
-                    ctx.Pe.WriteRva(dataRva, BitConverter.GetBytes((ushort)(current | characteristics)));
+                    // Upgrade an undersized 2-byte record to a compliant 4-byte DWORD slot.
+                    uint current = BinaryPrimitives.ReadUInt16LittleEndian(ctx.Pe.ReadRva(dataRva, sizeof(ushort)));
+                    uint upgradedRva = AllocatePayload(ctx, current | characteristics, out uint upgradedRaw);
+                    // Allocating the replacement can grow .rmpd and relocate raw
+                    // debug payloads. Re-read the descriptor so its raw pointer is
+                    // not restored from the stale pre-growth copy below.
+                    descriptor = ctx.Pe.ReadRva(descRva, DebugDirectorySize);
+                    BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(16), sizeof(uint));
+                    BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(20), upgradedRva);
+                    BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(24), upgradedRaw);
+                    ctx.Pe.WriteRva(descRva, descriptor);
                     return;
                 }
             }
         }
 
-        uint payloadRva = ctx.AllocData(sizeof(ushort), 2);
-        ctx.WriteData(payloadRva, BitConverter.GetBytes(characteristics));
-        PeImage.Section payloadSection = ctx.Pe.SectionFromRva(payloadRva)
-            ?? throw new InvalidOperationException("Extended-characteristics payload was not allocated in a section.");
-        uint payloadRaw = checked(payloadSection.PointerToRawData
-            + payloadRva - payloadSection.VirtualAddress);
+        uint payloadRva = AllocatePayload(ctx, characteristics, out uint payloadRaw);
+
+        // The allocation above may have shifted a later section or the overlay.
+        // Preserve the raw pointers that PeImage adjusted in the live directory,
+        // rather than rebuilding it from copies captured before the growth.
+        if (!directory.IsEmpty)
+        {
+            for (int i = 0; i < descriptors.Count; i++)
+            {
+                uint descRva = checked(directory.RelativeVirtualAddress + checked((uint)(i * DebugDirectorySize)));
+                descriptors[i] = ctx.Pe.ReadRva(descRva, DebugDirectorySize);
+            }
+        }
 
         var added = new byte[DebugDirectorySize];
         BinaryPrimitives.WriteUInt32LittleEndian(added.AsSpan(4), ctx.Pe.TimeDateStamp);
         BinaryPrimitives.WriteUInt32LittleEndian(
             added.AsSpan(12), ImageDebugTypeExtendedDllCharacteristics);
-        BinaryPrimitives.WriteUInt32LittleEndian(added.AsSpan(16), sizeof(ushort));
+        BinaryPrimitives.WriteUInt32LittleEndian(added.AsSpan(16), sizeof(uint));
         BinaryPrimitives.WriteUInt32LittleEndian(added.AsSpan(20), payloadRva);
         BinaryPrimitives.WriteUInt32LittleEndian(added.AsSpan(24), payloadRaw);
         descriptors.Add(added);
@@ -66,6 +94,18 @@ public static class ExtendedDllCharacteristicsEditor
             descriptors[i].CopyTo(rebuilt, i * DebugDirectorySize);
         uint rebuiltRva = ctx.AllocData(rebuilt.Length, 4);
         ctx.WriteData(rebuiltRva, rebuilt);
-        ctx.Pe.SetDirectory(DataDir.Debug, rebuiltRva, (uint)rebuilt.Length);
+        ctx.Pe.SetDirectory(DataDir.Debug, rebuiltRva, checked((uint)rebuilt.Length));
+    }
+
+    private static uint AllocatePayload(BuildContext ctx, uint value, out uint rawOffset)
+    {
+        uint payloadRva = ctx.AllocData(sizeof(uint), 4);
+        Span<byte> bytes = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        ctx.WriteData(payloadRva, bytes);
+        PeImage.Section payloadSection = ctx.Pe.SectionFromRva(payloadRva)
+            ?? throw new InvalidOperationException("Extended-characteristics payload was not allocated in a section.");
+        rawOffset = checked(payloadSection.PointerToRawData + payloadRva - payloadSection.VirtualAddress);
+        return payloadRva;
     }
 }

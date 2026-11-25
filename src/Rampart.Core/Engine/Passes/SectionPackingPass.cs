@@ -53,8 +53,10 @@ public sealed class SectionPackingPass
         foreach (var item in payloads)
         {
             PeImage.Section section = item.Section;
-            uint payloadRva = context.Alloc(item.Packed.Length, 8);
-            context.WriteStub(payloadRva, item.Packed);
+            // Store compressed section payloads in non-executable .rmpd rather
+            // than executable .rmpt so executable code pages contain only code.
+            uint payloadRva = context.AllocData(item.Packed.Length, 8);
+            context.WriteData(payloadRva, item.Packed);
             int decoderLength = LzssDecoderEmitter.Emit(0, 0, item.Packed.Length, 0, section.Data.Length).Length;
             uint decoderRva = context.Alloc(decoderLength, 16);
             context.WriteStub(decoderRva, LzssDecoderEmitter.Emit(decoderRva, payloadRva,
@@ -63,10 +65,13 @@ public sealed class SectionPackingPass
             rawBytes += section.SizeOfRawData;
             packedBytes += item.Packed.Length;
             // Retain the loader mapping, including raw alignment padding which
-            // may be referenced by native code; remove only its disk backing.
+            // may be referenced by native code; remove only its disk backing and
+            // classify the zero-raw-size section as uninitialized data (BSS).
             section.VirtualSize = section.ResolvedVirtualSize;
             section.SizeOfRawData = 0;
             section.PointerToRawData = 0;
+            section.Characteristics = (section.Characteristics & ~SectionCharacteristics.CntInitializedData)
+                | SectionCharacteristics.CntUninitializedData;
             section.Data = [];
         }
         context.InitChain.InsertRange(0, initializers);

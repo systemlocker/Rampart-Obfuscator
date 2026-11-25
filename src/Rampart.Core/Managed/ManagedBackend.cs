@@ -32,21 +32,29 @@ public sealed class ManagedBackend
             ManagedPreflight.Fail("MANAGED_SYMBOL_LIMIT", "The symbol file exceeds the configured input limit.");
         if (options.PreserveDebugSymbols && portablePdb is not null && changes && (!portablePdb.AsSpan().StartsWith("BSJB"u8)))
             ManagedPreflight.Fail("MANAGED_WINDOWS_PDB", "Supply portable symbols or explicitly disable symbol preservation.");
+        var readExternalSymbols = options.PreserveDebugSymbols && portablePdb is not null && portablePdb.AsSpan().StartsWith("BSJB"u8);
+        if (readExternalSymbols) ManagedPreflight.ValidatePortablePdb(portablePdb, options);
+        var readEmbeddedSymbols = !readExternalSymbols && options.PreserveDebugSymbols && HasEmbeddedPdb(input);
         var inputHash = Hash(input);
         using var inputStream = new MemoryStream(input, false);
         using var symbolInput = portablePdb is null ? null : new MemoryStream(portablePdb, false);
         var parameters = new ReaderParameters { ReadingMode = ReadingMode.Deferred, InMemory = true };
-        if (options.PreserveDebugSymbols && portablePdb is not null && portablePdb.AsSpan().StartsWith("BSJB"u8))
+        if (readExternalSymbols)
         { parameters.ReadSymbols = true; parameters.SymbolStream = symbolInput; parameters.SymbolReaderProvider = new PortablePdbReaderProvider(); }
-        else if (options.PreserveDebugSymbols && HasEmbeddedPdb(input))
+        else if (readEmbeddedSymbols)
         { parameters.ReadSymbols = true; parameters.SymbolReaderProvider = new ManagedEmbeddedReader(); }
+        byte[]? key = null;
         try
         {
             using var module = ModuleDefinition.ReadModule(inputStream, parameters);
-            var watermarkOnly = options.RemoveWatermark && options.Watermark is null && !options.Strings && !options.Constants && !options.MetadataHygiene
-                && !options.Integrity && !options.RenamePrivateMembers && !options.ControlFlow && !options.Virtualize && options.Rules.Count == 0;
-            if (changes && !watermarkOnly && (module.Types.Any(t => t.Name.StartsWith("<Rampart_", StringComparison.Ordinal))
-                || module.Resources.Any(r => r.Name.StartsWith("Rampart.Managed.", StringComparison.Ordinal))))
+            var hasActiveProtection = module.Types.Any(t => t.Name.StartsWith("<Rampart_", StringComparison.Ordinal))
+                || module.Resources.Any(r => r.Name.StartsWith("Rampart.Managed.", StringComparison.Ordinal)
+                    && r.Name is not ("Rampart.Managed.Watermark" or "Rampart.Managed.Manifest"));
+            var watermarkOnly = (options.RemoveWatermark || options.Watermark is not null)
+                && !options.Strings && !options.Constants && !options.MetadataHygiene
+                && !options.Integrity && !options.RenamePrivateMembers && !options.ControlFlow
+                && !options.Virtualize && options.Rules.Count == 0;
+            if (changes && !watermarkOnly && hasActiveProtection)
                 ManagedPreflight.Fail("MANAGED_ALREADY_PROTECTED", "This assembly already contains managed protection output.");
             var allMethods = Types(module.Types).SelectMany(t => t.Methods).ToArray();
             var identities = allMethods.ToDictionary(m => m, ManagedPolicy.Identity);
@@ -75,9 +83,10 @@ public sealed class ManagedBackend
                     }).ToArray(),
                     inputTokens.Select(t => new ManagedTokenMapping(t, t)).ToArray(), inputHash, inputHash, diagnostics), options);
             var originalPublicKey = module.Assembly.Name.PublicKey.ToArray();
-            var key = ReadSigningKey(module, options);
+            key = ReadSigningKey(module, options);
+            var signingUnsignedAssembly = originalPublicKey.Length == 0 && key is not null;
             var preservedTypes = module.GetTypes().Select(t => t.FullName).ToHashSet(StringComparer.Ordinal);
-            var api = PublicApi(module, preservedTypes);
+            var api = PublicApi(module, preservedTypes, ignoreAssemblyPublicKey: signingUnsignedAssembly);
             var references = module.AssemblyReferences.Select(a => a.FullName).Order().ToArray();
             var keeps = ReadKeeps(options);
             var contracts = ManagedContractAnalysis.Analyze(module);
@@ -91,15 +100,19 @@ public sealed class ManagedBackend
             }
             var suffix = Hash(Encoding.UTF8.GetBytes(inputHash + "|" + seed))[..16];
             var renaming = new ManagedRenaming(module, contracts, keeps);
-            if (options.RenamePrivateMembers) renaming.Apply(seed);
+            if (options.RenamePrivateMembers || options.Rules.Any(r => r.RenamePrivateMembers == true)) renaming.Apply(seed, options);
             var resourceName = "Rampart.Managed.Payload." + suffix;
             TypeDefinition? helper = null;
-            if (options.Strings || options.Integrity || options.Virtualize || options.Rules.Any(r => r.Strings == true || r.Virtualize == true))
+            var needDecode = options.Strings || options.Rules.Any(r => r.Strings == true)
+                || options.HardenedRuntime && (options.Virtualize || options.Rules.Any(r => r.Virtualize == true));
+            var needVerify = options.Integrity;
+            var needInterpret = options.Virtualize || options.Rules.Any(r => r.Virtualize == true);
+            if (needDecode || needVerify || needInterpret)
             {
                 var framework = RequireHelperRuntime(module);
                 if (framework && options.HardenedRuntime)
                     ManagedPreflight.Fail("MANAGED_HARDENED_RUNTIME_UNSUPPORTED", "Hardened runtime protection requires modern .NET.");
-                helper = ManagedHelperInjector.Inject(module, suffix, framework, options.HardenedRuntime);
+                helper = ManagedHelperInjector.Inject(module, suffix, framework, options.HardenedRuntime, needDecode, needVerify, needInterpret);
                 if (options.HardenedRuntime)
                     diagnostics.Add("MANAGED_HARDENED_RUNTIME: Payloads use AES-256-CBC with HMAC-SHA256; selected VM methods use independent dispatch layouts. Decoding keys ship with the application.");
             }
@@ -194,9 +207,16 @@ public sealed class ManagedBackend
             foreach (var method in allMethods) debugMaps[method].Rebind(method);
             if (options.MetadataHygiene)
             {
+                var scrubbed = 0;
                 foreach (var method in allMethods)
-                    foreach (var point in method.DebugInformation.SequencePoints) point.Document.Url = Path.GetFileName(point.Document.Url.Replace('\\', '/'));
-                diagnostics.Add("MANAGED_METADATA_HYGIENE: Portable sequence-point document paths were reduced to file names.");
+                    foreach (var point in method.DebugInformation.SequencePoints)
+                    {
+                        point.Document.Url = Path.GetFileName(point.Document.Url.Replace('\\', '/'));
+                        scrubbed++;
+                    }
+                diagnostics.Add(scrubbed > 0
+                    ? "MANAGED_METADATA_HYGIENE: Portable sequence-point document paths were reduced to file names."
+                    : "MANAGED_METADATA_HYGIENE_NO_SYMBOLS: No portable sequence points were present to scrub.");
             }
             if (options.RemoveWatermark || options.Watermark is not null)
             {
@@ -212,38 +232,56 @@ public sealed class ManagedBackend
             {
                 var bytes = payload.ToArray();
                 module.Resources.Add(new EmbeddedResource(resourceName, ManifestResourceAttributes.Private, bytes));
-                if (options.Integrity) AddInitializer(module, helper.Methods.Single(m => m.Name == "Verify"), resourceName, Hash(bytes));
+                if (options.Integrity)
+                {
+                    var (initializer, created) = AddInitializer(module, helper.Methods.Single(m => m.Name == "Verify"), resourceName, Hash(bytes));
+                    if (created)
+                    {
+                        diagnostics.Add("MANAGED_INTEGRITY_INITIALIZER: Added a module initializer to verify the embedded payload resource.");
+                    }
+                    else
+                    {
+                        var existingIndex = work.FindIndex(item => ReferenceEquals(item.Method, initializer));
+                        if (existingIndex >= 0)
+                        {
+                            var existing = work[existingIndex];
+                            existing.Applied.Add("integrity");
+                            work[existingIndex] = (existing.Method, existing.Applied, existing.Skipped, existing.Owner ?? "managed-il", existing.Requested);
+                        }
+                    }
+                }
                 foreach (var method in helper.Methods) ManagedIlVerifier.Validate(method);
             }
             if (!module.Resources.Any(r => r.Name == "Rampart.Managed.Manifest"))
                 module.Resources.Add(new EmbeddedResource("Rampart.Managed.Manifest", ManifestResourceAttributes.Private, Encoding.UTF8.GetBytes("Rampart.Managed/1\n" + inputHash)));
             using var output = new MemoryStream(); using var symbols = new MemoryStream();
             var writer = new WriterParameters { Timestamp = 0, DeterministicMvid = true, StrongNameKeyBlob = key };
+            var writeEmbeddedSymbols = false;
             if (module.HasSymbols && options.PreserveDebugSymbols)
             {
                 writer.WriteSymbols = true;
-                if (HasEmbeddedPdb(input)) writer.SymbolWriterProvider = new ManagedEmbeddedWriter();
+                if (readEmbeddedSymbols) { writeEmbeddedSymbols = true; writer.SymbolWriterProvider = new ManagedEmbeddedWriter(); }
                 else { writer.SymbolWriterProvider = new PortablePdbWriterProvider(); writer.SymbolStream = symbols; }
             }
-            try { module.Write(output, writer); }
-            finally { if (key is not null) CryptographicOperations.ZeroMemory(key); }
+            module.Write(output, writer);
             var result = output.ToArray();
             if (result.LongLength > (long)input.Length * (100 + options.MaximumOutputGrowthPercent) / 100 + 65536)
                 ManagedPreflight.Fail("MANAGED_OUTPUT_LIMIT", "The rewritten assembly exceeds its output growth budget.");
             ManagedPreflight.Validate(result, options);
-            if (!originalPublicKey.AsSpan().SequenceEqual(module.Assembly.Name.PublicKey))
+            var emittedPublicKey = module.Assembly.Name.PublicKey.ToArray();
+            if (originalPublicKey.Length != 0 && !originalPublicKey.AsSpan().SequenceEqual(emittedPublicKey))
                 ManagedPreflight.Fail("MANAGED_SIGNING_IDENTITY", "The signing key does not preserve the assembly public key.");
-            if (originalPublicKey.Length != 0) ManagedStrongNameValidator.Validate(result, originalPublicKey);
+            if (emittedPublicKey.Length != 0) ManagedStrongNameValidator.Validate(result, emittedPublicKey);
             using var checkSymbols = new MemoryStream(symbols.ToArray(), false);
             var checkParameters = new ReaderParameters();
             if (writer.WriteSymbols)
             {
                 checkParameters.ReadSymbols = true;
-                if (HasEmbeddedPdb(result)) checkParameters.SymbolReaderProvider = new ManagedEmbeddedReader();
+                if (writeEmbeddedSymbols) checkParameters.SymbolReaderProvider = new ManagedEmbeddedReader();
                 else { checkParameters.SymbolReaderProvider = new PortablePdbReaderProvider(); checkParameters.SymbolStream = checkSymbols; }
             }
             using var check = ModuleDefinition.ReadModule(new MemoryStream(result, false), checkParameters);
-            if (!api.SequenceEqual(PublicApi(check, preservedTypes, renaming.Normalize))) ManagedPreflight.Fail("MANAGED_PUBLIC_API_CHANGED", "Public API validation failed.");
+            if (!api.SequenceEqual(PublicApi(check, preservedTypes, renaming.Normalize, signingUnsignedAssembly))) ManagedPreflight.Fail("MANAGED_PUBLIC_API_CHANGED", "Public API validation failed.");
             if (references.Except(check.AssemblyReferences.Select(a => a.FullName)).Any())
                 ManagedPreflight.Fail("MANAGED_REFERENCE_CHANGED", "Assembly reference preservation failed.");
             foreach (var method in Types(check.Types).SelectMany(t => t.Methods)) ManagedIlVerifier.Validate(method);
@@ -262,20 +300,27 @@ public sealed class ManagedBackend
                 ProtectedIlSize = ((MethodDefinition)check.LookupToken(item.Method.MetadataToken)).HasBody
                         ? ((MethodDefinition)check.LookupToken(item.Method.MetadataToken)).Body.CodeSize : 0,
                 SequencePoints = debugMaps[item.Method].Emitted(item.Method, (MethodDefinition)check.LookupToken(item.Method.MetadataToken), writer.WriteSymbols, item.Owner),
-                Sites = originalSites[item.Method].Select(site => new ManagedSiteEvidence(identities[item.Method].StableId + ":" + site.Offset,
-                site.Offset, site.Protection, item.Applied.Any(a => a.StartsWith(site.Protection + ":", StringComparison.Ordinal))
-                    && SiteReason(site.Instruction, site.Protection) is null ? "applied" : "skipped",
-                item.Requested.Contains(site.Protection) && SiteReason(site.Instruction, site.Protection) is { } reason ? reason
-                    : item.Applied.Any(a => a.StartsWith(site.Protection + ":", StringComparison.Ordinal)) ? null : item.Skipped.FirstOrDefault(s => s.StartsWith(site.Protection + ":", StringComparison.Ordinal)) ?? "disabled-or-owned-by-another-pass")).ToArray()
+                Sites = originalSites[item.Method].Select(site =>
+                {
+                    bool appliedSite = item.Applied.Any(a => a.StartsWith(site.Protection + ":", StringComparison.Ordinal))
+                        && SiteReason(site.Instruction, site.Protection) is null;
+                    string? reason = appliedSite ? null
+                        : item.Skipped.Contains("policy:excluded", StringComparer.Ordinal) ? "policy:excluded"
+                        : item.Requested.Contains(site.Protection) && SiteReason(site.Instruction, site.Protection) is { } siteReason ? siteReason
+                        : item.Skipped.FirstOrDefault(s => s.StartsWith(site.Protection + ":", StringComparison.Ordinal)) ?? "disabled-or-owned-by-another-pass";
+                    return new ManagedSiteEvidence(identities[item.Method].StableId + ":" + site.Offset,
+                        site.Offset, site.Protection, appliedSite ? "applied" : "skipped", reason);
+                }).ToArray()
             }).ToArray();
             return ManagedVerification.VerifyResult(new ManagedProtectionResult(result, writer.WriteSymbols && symbols.Length != 0 ? symbols.ToArray() : null,
                 evidence, mappings, inputHash, Hash(result), diagnostics)
             { IdentifierRenames = renaming.Evidence() }, options);
         }
         catch (ManagedProtectionException) { throw; }
-        catch (Exception error) when (error is BadImageFormatException or ArgumentException or IndexOutOfRangeException
-            or NotSupportedException or NotImplementedException or EndOfStreamException or NullReferenceException)
-        { throw new ManagedProtectionException("MANAGED_REWRITE_FAILED", "The assembly could not be safely read or rewritten."); }
+        catch (Exception error) when (error is BadImageFormatException or InvalidOperationException or ArgumentException or IndexOutOfRangeException
+            or NotSupportedException or NotImplementedException or EndOfStreamException)
+        { throw new ManagedProtectionException("MANAGED_REWRITE_FAILED", "The assembly could not be safely read or rewritten.", error); }
+        finally { if (key is not null) CryptographicOperations.ZeroMemory(key); }
     }
 
     public static string? ReadWatermark(byte[] input)
@@ -299,33 +344,122 @@ public sealed class ManagedBackend
         selection.Vm || vm ? "virtualize" : null
     }.OfType<string>().ToArray();
     private static string MethodHash(MethodDefinition method) => !method.HasBody ? Hash([]) : Hash(Encoding.UTF8.GetBytes(string.Join("\n", method.Body.Instructions.Select(i => i.ToString()))));
-    private static string[] PublicApi(ModuleDefinition module, HashSet<string> preservedTypes, Func<string, string>? normalize = null)
+    private static string[] PublicApi(ModuleDefinition module, HashSet<string> preservedTypes,
+        Func<string, string>? normalize = null, bool ignoreAssemblyPublicKey = false)
     {
         normalize ??= value => value;
-        var snapshot = new List<string> { "assembly:" + module.Assembly.Name.FullName, "kind:" + module.Kind,
-            "assembly-attributes:" + Attributes(module.Assembly), "module-attributes:" + Attributes(module) };
-        foreach (var type in module.GetTypes().Where(t => preservedTypes.Contains(normalize(t.FullName))))
+        var assemblyName = ignoreAssemblyPublicKey
+            ? $"{module.Assembly.Name.Name}, Version={module.Assembly.Name.Version}, Culture={(string.IsNullOrEmpty(module.Assembly.Name.Culture) ? "neutral" : module.Assembly.Name.Culture)}"
+            : module.Assembly.Name.FullName;
+        var snapshot = new List<string> { "assembly:" + assemblyName, "kind:" + module.Kind,
+            "assembly-attributes:" + normalize(Attributes(module.Assembly)), "module-attributes:" + normalize(Attributes(module)) };
+        foreach (var type in module.GetTypes().Where(t => preservedTypes.Contains(IsExternallyVisibleType(t) ? t.FullName : normalize(t.FullName))))
         {
-            snapshot.Add($"type:{type.FullName}|{type.Attributes}|{type.BaseType?.FullName}|{type.PackingSize}|{type.ClassSize}|{Attributes(type)}");
-            foreach (var implementation in type.Interfaces) snapshot.Add($"interface:{type.FullName}|{implementation.InterfaceType.FullName}|{Attributes(implementation)}");
-            foreach (var generic in type.GenericParameters) snapshot.Add(Generic(type.FullName, generic));
-            foreach (var field in type.Fields) snapshot.Add($"field:{field.FullName}|{field.Attributes}|{field.Offset}|{Attributes(field)}");
-            foreach (var property in type.Properties) snapshot.Add($"property:{property.FullName}|{property.Attributes}|{Attributes(property)}");
-            foreach (var item in type.Events) snapshot.Add($"event:{item.FullName}|{item.Attributes}|{Attributes(item)}");
+            // Never normalize declaration names of externally visible types or their
+            // public/protected members so an unintended rename cannot be hidden.
+            var externalType = IsExternallyVisibleType(type);
+            string MaybeNormalize(string value, bool keepRaw) => keepRaw ? value : normalize(value);
+            string NormalizeExceptMemberName(string fullName, string memberName)
+            {
+                var separator = fullName.LastIndexOf("::", StringComparison.Ordinal);
+                if (separator < 0) return normalize(fullName);
+                var afterSeparator = fullName[(separator + 2)..];
+                if (!afterSeparator.StartsWith(memberName, StringComparison.Ordinal)) return normalize(fullName);
+                return normalize(fullName[..separator]) + "::" + memberName + normalize(afterSeparator[memberName.Length..]);
+            }
+
+            snapshot.Add(MaybeNormalize($"type:{type.FullName}|{type.Attributes}|{type.BaseType?.FullName}|{type.PackingSize}|{type.ClassSize}|{Attributes(type)}", externalType));
+            foreach (var implementation in type.Interfaces)
+                snapshot.Add(MaybeNormalize($"interface:{type.FullName}|{implementation.InterfaceType.FullName}|{Attributes(implementation)}", externalType));
+            foreach (var generic in type.GenericParameters)
+                snapshot.Add(MaybeNormalize(Generic(type.FullName, generic), externalType));
+            foreach (var field in type.Fields)
+            {
+                var externalField = field.IsPublic || field.IsFamily || field.IsFamilyOrAssembly;
+                if (externalType && externalField)
+                    snapshot.Add($"field:{field.FullName}|{field.Attributes}|{field.Offset}|{Attributes(field)}");
+                else if (externalField)
+                    snapshot.Add($"field:{NormalizeExceptMemberName(field.FullName, field.Name)}|{field.Attributes}|{field.Offset}|{normalize(Attributes(field))}");
+                else
+                    snapshot.Add(normalize($"field:{field.FullName}|{field.Attributes}|{field.Offset}|{Attributes(field)}"));
+            }
+            foreach (var property in type.Properties)
+            {
+                var externalProperty = (property.GetMethod is { } g && (g.IsPublic || g.IsFamily || g.IsFamilyOrAssembly))
+                    || (property.SetMethod is { } s && (s.IsPublic || s.IsFamily || s.IsFamilyOrAssembly));
+                if (externalType && externalProperty)
+                    snapshot.Add($"property:{property.FullName}|{property.Attributes}|{Attributes(property)}");
+                else if (externalProperty)
+                    snapshot.Add($"property:{NormalizeExceptMemberName(property.FullName, property.Name)}|{property.Attributes}|{normalize(Attributes(property))}");
+                else
+                    snapshot.Add(normalize($"property:{property.FullName}|{property.Attributes}|{Attributes(property)}"));
+            }
+            foreach (var item in type.Events)
+            {
+                var externalEvent = (item.AddMethod is { } a && (a.IsPublic || a.IsFamily || a.IsFamilyOrAssembly))
+                    || (item.RemoveMethod is { } r && (r.IsPublic || r.IsFamily || r.IsFamilyOrAssembly));
+                if (externalType && externalEvent)
+                    snapshot.Add($"event:{item.FullName}|{item.Attributes}|{Attributes(item)}");
+                else if (externalEvent)
+                    snapshot.Add($"event:{NormalizeExceptMemberName(item.FullName, item.Name)}|{item.Attributes}|{normalize(Attributes(item))}");
+                else
+                    snapshot.Add(normalize($"event:{item.FullName}|{item.Attributes}|{Attributes(item)}"));
+            }
             foreach (var method in type.Methods.Where(m => !m.IsPrivate))
             {
                 // FullName retains return/parameter custom modifiers and generic arity;
                 // constraints and attributes need separate entries to detect contract loss.
-                snapshot.Add($"method:{method.FullName}|{method.Attributes}|{method.ImplAttributes}|{Attributes(method)}|{Attributes(method.MethodReturnType)}");
-                foreach (var parameter in method.Parameters) snapshot.Add($"parameter:{method.FullName}|{parameter.Index}|{parameter.Name}|{parameter.Attributes}|{Attributes(parameter)}");
-                foreach (var generic in method.GenericParameters) snapshot.Add(Generic(method.FullName, generic));
-                foreach (var implementation in method.Overrides) snapshot.Add($"override:{method.FullName}|{implementation.FullName}");
+                var externalMethod = method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly;
+                var keepRaw = externalType && externalMethod;
+                var methodFullName = keepRaw ? method.FullName
+                    : externalMethod ? NormalizeExceptMemberName(method.FullName, method.Name)
+                    : normalize(method.FullName);
+                snapshot.Add($"method:{methodFullName}|{method.Attributes}|{method.ImplAttributes}|{MaybeNormalize(Attributes(method), keepRaw)}|{MaybeNormalize(Attributes(method.MethodReturnType), keepRaw)}");
+                foreach (var parameter in method.Parameters)
+                    snapshot.Add($"parameter:{methodFullName}|{parameter.Index}|{(externalMethod ? parameter.Name : normalize(parameter.Name))}|{parameter.Attributes}|{MaybeNormalize(Attributes(parameter), keepRaw)}");
+                foreach (var generic in method.GenericParameters)
+                    snapshot.Add(MaybeNormalize(Generic(methodFullName, generic), keepRaw));
+                foreach (var implementation in method.Overrides)
+                    snapshot.Add($"override:{methodFullName}|{MaybeNormalize(implementation.FullName, keepRaw)}");
             }
         }
-        return snapshot.Select(normalize).Order(StringComparer.Ordinal).ToArray();
+        return snapshot.Order(StringComparer.Ordinal).ToArray();
+        static bool IsExternallyVisibleType(TypeDefinition type)
+        {
+            for (var current = type; current is not null; current = current.DeclaringType)
+            {
+                if (current.DeclaringType is null)
+                { if (!current.IsPublic) return false; }
+                else if (!(current.IsNestedPublic || current.IsNestedFamily || current.IsNestedFamilyOrAssembly))
+                    return false;
+            }
+            return true;
+        }
         static string Attributes(ICustomAttributeProvider provider) => string.Join(";", provider.CustomAttributes.Select(a => a.Constructor.FullName + ":" + Convert.ToHexString(a.GetBlob())).Order(StringComparer.Ordinal));
         static string Generic(string owner, GenericParameter generic) => $"generic:{owner}|{generic.Position}|{generic.Name}|{generic.Attributes}|{Attributes(generic)}|"
             + string.Join(";", generic.Constraints.Select(c => c.ConstraintType.FullName + ":" + Attributes(c)).Order(StringComparer.Ordinal));
+    }
+    private static byte[] ReadBoundedFile(string path, int maxBytes, string missingCode, string missingMessage, string limitCode, string limitMessage)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[Math.Min(8192, maxBytes + 1)];
+            while (true)
+            {
+                var remaining = maxBytes + 1 - (int)buffer.Length;
+                if (remaining <= 0) break;
+                var read = stream.Read(chunk, 0, Math.Min(chunk.Length, remaining));
+                if (read == 0) break;
+                buffer.Write(chunk, 0, read);
+                if (buffer.Length > maxBytes) ManagedPreflight.Fail(limitCode, limitMessage);
+            }
+            return buffer.ToArray();
+        }
+        catch (ManagedProtectionException) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        { throw new ManagedProtectionException(missingCode, missingMessage, error); }
     }
     private static string[] ReadKeeps(ManagedProtectionOptions options)
     {
@@ -333,9 +467,14 @@ public sealed class ManagedBackend
         if (options.KeepFileEnvironmentVariable is { } variable)
         {
             var path = Environment.GetEnvironmentVariable(variable);
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) ManagedPreflight.Fail("MANAGED_KEEP_FILE", "The configured keep file is unavailable.");
-            if (new FileInfo(path!).Length > 65536) ManagedPreflight.Fail("MANAGED_KEEP_FILE", "The keep file exceeds its size limit.");
-            keeps.AddRange(File.ReadLines(path!).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#')));
+            if (string.IsNullOrWhiteSpace(path)) ManagedPreflight.Fail("MANAGED_KEEP_FILE", "The configured keep file is unavailable.");
+            var bytes = ReadBoundedFile(path!, 65536, "MANAGED_KEEP_FILE", "The configured keep file is unavailable.", "MANAGED_KEEP_FILE", "The keep file exceeds its size limit.");
+            using var reader = new StreamReader(new MemoryStream(bytes, writable: false), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            while (reader.ReadLine() is { } line)
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length > 0 && !trimmed.StartsWith('#')) keeps.Add(trimmed);
+            }
         }
         if (keeps.Count > 4096 || keeps.Any(k => k.Length > 4096)) ManagedPreflight.Fail("MANAGED_KEEP_LIMIT", "The keep policy exceeds its limits.");
         return keeps.ToArray();
@@ -345,31 +484,42 @@ public sealed class ManagedBackend
         if (!module.Assembly.Name.HasPublicKey && options.StrongNameKeyEnvironmentVariable is null) return null;
         if (options.StrongNameKeyEnvironmentVariable is not { } variable) ManagedPreflight.Fail("MANAGED_SIGNING_KEY_REQUIRED", "A strong-named assembly requires an explicit re-signing key for mutation.");
         var path = Environment.GetEnvironmentVariable(options.StrongNameKeyEnvironmentVariable!);
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) ManagedPreflight.Fail("MANAGED_SIGNING_KEY_REQUIRED", "The configured signing key is unavailable.");
-        if (new FileInfo(path!).Length > 16384) ManagedPreflight.Fail("MANAGED_SIGNING_KEY_FORMAT", "The signing key exceeds its supported size.");
-        return File.ReadAllBytes(path!);
+        if (string.IsNullOrWhiteSpace(path)) ManagedPreflight.Fail("MANAGED_SIGNING_KEY_REQUIRED", "The configured signing key is unavailable.");
+        return ReadBoundedFile(path!, 16384, "MANAGED_SIGNING_KEY_REQUIRED", "The configured signing key is unavailable.", "MANAGED_SIGNING_KEY_FORMAT", "The signing key exceeds its supported size.");
     }
     private static bool RequireHelperRuntime(ModuleDefinition module)
     {
         var target = module.Assembly.CustomAttributes.FirstOrDefault(a => a.AttributeType.FullName == "System.Runtime.Versioning.TargetFrameworkAttribute");
         var name = target?.ConstructorArguments.FirstOrDefault().Value as string;
-        if (name is not null && name.StartsWith(".NETFramework,Version=v", StringComparison.Ordinal)
-            && Version.TryParse(name[23..], out var frameworkVersion) && frameworkVersion >= new Version(4, 8) && frameworkVersion <= new Version(4, 8, 1)
-            && module.TypeSystem.CoreLibrary.Name == "mscorlib") return true;
-        if (name is not null && name.StartsWith(".NETCoreApp,Version=v", StringComparison.Ordinal)
-            && Version.TryParse(name[21..], out var version) && version.Major >= 8) return false;
+        if (name is not null)
+        {
+            var parts = name.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            var identifier = parts.Length > 0 ? parts[0] : "";
+            var versionPart = parts.FirstOrDefault(p => p.StartsWith("Version=v", StringComparison.OrdinalIgnoreCase));
+            if (versionPart is not null && Version.TryParse(versionPart[9..], out var version))
+            {
+                if (identifier.Equals(".NETFramework", StringComparison.OrdinalIgnoreCase)
+                    && version.Major == 4 && version.Minor == 8
+                    && (version.Build <= 0 || (version.Build == 1 && version.Revision <= 0))
+                    && module.TypeSystem.CoreLibrary.Name == "mscorlib")
+                    return true;
+                if (identifier.Equals(".NETCoreApp", StringComparison.OrdinalIgnoreCase) && version.Major >= 8)
+                    return false;
+            }
+        }
         ManagedPreflight.Fail("MANAGED_HELPER_RUNTIME", "Runtime helpers require .NET 8 or later, or .NET Framework 4.8 or 4.8.1.");
         return false;
     }
     private static bool HasEmbeddedPdb(byte[] input)
     {
         try { using var pe = new PEReader(new MemoryStream(input, false)); return pe.ReadDebugDirectory().Any(d => d.Type == DebugDirectoryEntryType.EmbeddedPortablePdb); }
-        catch (BadImageFormatException) { throw new ManagedProtectionException("MANAGED_INVALID_SYMBOLS", "The image debug directory is malformed."); }
+        catch (BadImageFormatException error) { throw new ManagedProtectionException("MANAGED_INVALID_SYMBOLS", "The image debug directory is malformed.", error); }
     }
-    private static void AddInitializer(ModuleDefinition module, MethodDefinition helper, string resource, string digest)
+    private static (MethodDefinition Initializer, bool Created) AddInitializer(ModuleDefinition module, MethodDefinition helper, string resource, string digest)
     {
         var type = module.Types.Single(t => t.Name == "<Module>");
         var initializer = type.Methods.SingleOrDefault(m => m.Name == ".cctor");
+        var created = initializer is null;
         if (initializer is null)
         {
             initializer = new MethodDefinition(".cctor", MethodAttributes.Static | MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, module.TypeSystem.Void);
@@ -378,5 +528,9 @@ public sealed class ManagedBackend
         var il = initializer.Body.GetILProcessor(); var first = initializer.Body.Instructions[0];
         il.InsertBefore(first, Instruction.Create(OpCodes.Ldstr, resource)); il.InsertBefore(first, Instruction.Create(OpCodes.Ldstr, digest));
         il.InsertBefore(first, Instruction.Create(OpCodes.Call, helper));
+        ManagedTransforms.ExpandBranches(initializer);
+        ManagedIlVerifier.UpdateMaxStackSize(initializer);
+        ManagedIlVerifier.Validate(initializer);
+        return (initializer, created);
     }
 }

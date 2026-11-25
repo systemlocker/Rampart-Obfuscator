@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Rampart.Config;
+using Rampart.Managed;
+using Rampart.NativeAot;
 using Rampart.Targets;
 
 namespace Rampart.Cli;
@@ -8,9 +10,9 @@ internal static class CheckCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Contains("--help", StringComparer.Ordinal))
+        if (args.Contains("--help", StringComparer.Ordinal) || args.Contains("-h", StringComparer.Ordinal))
         {
-            Console.WriteLine("usage: rampart check [--config <file>] [--preset <name>] [--set <id>=<level>] [--only <ids>] [--disable <ids>] [--group-level <group>=<level>] [--focus <tags>] [--symbols <file>] [--include-symbol <glob>] [--exclude-symbol <glob>] [--rva-range <start-end>] [--function-profile <glob>=<preset>] [--json]");
+            Console.WriteLine("usage: rampart check [--config <file>] [--target <kind>] [--compatibility <policy>] [--preset <name>] [--set <id>=<level>] [--only <ids>] [--disable <ids>] [--group-level <group>=<level>] [--focus <tags>] [--symbols <file>] [--include-symbol <glob>] [--exclude-symbol <glob>] [--rva-range <start-end>] [--function-profile <glob>=<preset>] [--json]");
             return 0;
         }
 
@@ -23,9 +25,24 @@ internal static class CheckCommand
         }
 
         var settings = settingsArgs.Build(catalog);
-        bool native = (settings.Targets?.Override ?? ProtectionTargetKind.NativePe) == ProtectionTargetKind.NativePe;
-        if (native) ThreatDials.Apply(settings, catalog);
-        if (settings.Targets?.Override == ProtectionTargetKind.ManagedIl) _ = ManagedProtectionBackend.ResolveOptions(settings);
+        var effectiveTarget = SettingsArguments.ResolveTargetKind(settings, detectedTarget: null);
+        bool native = effectiveTarget == ProtectionTargetKind.NativePe;
+        if (native)
+        {
+            ThreatDials.Apply(settings, catalog);
+        }
+        else if (effectiveTarget == ProtectionTargetKind.ManagedIl)
+        {
+            var managedOptions = ManagedProtectionBackend.ResolveOptions(settings);
+            ValidateManagedBounds(managedOptions);
+        }
+        else if (effectiveTarget == ProtectionTargetKind.NativeAot)
+        {
+            var aotPlan = NativeAotPassPolicy.Plan(settings, settings.Targets?.Compatibility == CompatibilityPolicy.Strict);
+            var rejected = aotPlan.FirstOrDefault(pass => pass.Status == NativeAotEvidenceStatus.Rejected);
+            if (rejected is not null)
+                throw new NativeAotCompatibilityException(rejected.ReasonCode, $"{rejected.Knob}: {rejected.Detail}");
+        }
         var concerns = native ? ConcernRules.Evaluate(settings, catalog) : new List<Concern>();
         int budget = native ? KnobCatalog.BudgetFor(settings, catalog) : 0;
 
@@ -34,7 +51,7 @@ internal static class CheckCommand
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 Valid = true,
-                Settings = SettingsArguments.SettingsPayload(settings, settings.Targets?.Override ?? ProtectionTargetKind.NativePe),
+                Settings = SettingsArguments.SettingsPayload(settings, effectiveTarget),
                 BudgetPoints = budget,
                 Concerns = concerns,
             }, ProtectionSettingsJson.Options));
@@ -46,13 +63,32 @@ internal static class CheckCommand
         }
         return concerns.Any(c => c.Severity == ConcernSeverity.Risky) ? 3 : 0;
     }
+
+    private static void ValidateManagedBounds(ManagedProtectionOptions options)
+    {
+        if (options.RequireVirtualization && !options.Rules.Any(rule => rule.Virtualize == true))
+            throw new ManagedProtectionException("MANAGED_VM_SELECTION_REQUIRED", "Required virtualization needs explicit method selection rules.");
+        if (options.MaximumProtectionMilliseconds is < 100 or > 600000
+            || options.MaximumVmInstructionCount is < 1 or > 65536
+            || options.MaximumInputBytes is < 1024 or > 268435456
+            || options.MaximumMethods is < 1 or > 200000
+            || options.MaximumMethodBytes is < 1 or > 4194304
+            || options.MaximumMetadataRows is < 1 or > 2000000
+            || options.MaximumOutputGrowthPercent is < 0 or > 1000)
+            throw new ManagedProtectionException("MANAGED_LIMITS", "Managed resource or execution limits are outside the supported bounds.");
+        if (options.Verification is { } verification
+            && (verification.MaximumReferenceCount is < 1 or > 4096
+                || verification.MaximumReferenceBytes is < 1 or > 2L * 1024 * 1024 * 1024
+                || verification.ReferencePaths.Count > verification.MaximumReferenceCount))
+            throw new ManagedProtectionException("MANAGED_VERIFICATION_LIMIT", "The verification reference limits are outside the supported bounds.");
+    }
 }
 
 internal static class KnobsCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Contains("--help", StringComparer.Ordinal))
+        if (args.Contains("--help", StringComparer.Ordinal) || args.Contains("-h", StringComparer.Ordinal))
         {
             Console.WriteLine("usage: rampart knobs [--group <name>] [--json]");
             return 0;
@@ -114,10 +150,10 @@ internal static class ExplainCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Length != 1 || args[0] == "--help")
+        if (args.Length != 1 || args[0] is "--help" or "-h")
         {
             Console.WriteLine("usage: rampart explain <knob-id>");
-            return args.Length == 1 ? 0 : 2;
+            return args.Length == 1 && args[0] is "--help" or "-h" ? 0 : 2;
         }
 
         var knob = KnobCatalog.Load().Get(args[0]);

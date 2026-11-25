@@ -28,7 +28,10 @@ internal static class ManagedFlowAnalysis
             if (item.Instruction.Operand is Instruction target) pending.Enqueue((target, next));
             if (item.Instruction.Operand is Instruction[] targets)
                 foreach (var destination in targets) pending.Enqueue((destination, next));
-            if (item.Instruction.OpCode.FlowControl is FlowControl.Return or FlowControl.Throw)
+            if (item.Instruction.OpCode.Code == Code.Jmp)
+            { if (item.Height != 0) return false; continue; }
+            if (item.Instruction.OpCode.FlowControl == FlowControl.Throw) continue;
+            if (item.Instruction.OpCode.FlowControl == FlowControl.Return)
             { if (next != 0) return false; continue; }
             if (item.Instruction.OpCode.FlowControl == FlowControl.Branch) continue;
             if (item.Instruction.Next is null) return false;
@@ -49,8 +52,8 @@ internal static class ManagedFlowAnalysis
                 or StackBehaviour.Popi_popr4 or StackBehaviour.Popi_popr8 or StackBehaviour.Popref_pop1 or StackBehaviour.Popref_popi => 2,
             StackBehaviour.Popi_popi_popi or StackBehaviour.Popref_popi_popi or StackBehaviour.Popref_popi_popi8
                 or StackBehaviour.Popref_popi_popr4 or StackBehaviour.Popref_popi_popr8 or StackBehaviour.Popref_popi_popref => 3,
-            StackBehaviour.Varpop when instruction.OpCode.Code == Code.Ret => method.ReturnType.MetadataType == MetadataType.Void ? 0 : 1,
-            StackBehaviour.Varpop when instruction.Operand is MethodReference called => called.Parameters.Count + (called.HasThis && instruction.OpCode.Code != Code.Newobj ? 1 : 0),
+            StackBehaviour.Varpop when instruction.OpCode.Code == Code.Ret => ManagedIlVerifier.IsVoid(method.ReturnType) ? 0 : 1,
+            StackBehaviour.Varpop when instruction.Operand is MethodReference called => called.Parameters.Count + (called.HasThis && !called.ExplicitThis && instruction.OpCode.Code != Code.Newobj ? 1 : 0),
             _ => -1
         };
         push = instruction.OpCode.StackBehaviourPush switch
@@ -58,7 +61,7 @@ internal static class ManagedFlowAnalysis
             StackBehaviour.Push0 => 0,
             StackBehaviour.Push1 or StackBehaviour.Pushi or StackBehaviour.Pushi8 or StackBehaviour.Pushr4 or StackBehaviour.Pushr8 or StackBehaviour.Pushref => 1,
             StackBehaviour.Push1_push1 => 2,
-            StackBehaviour.Varpush when instruction.Operand is MethodReference called => called.ReturnType.MetadataType == MetadataType.Void ? 0 : 1,
+            StackBehaviour.Varpush when instruction.Operand is MethodReference called => ManagedIlVerifier.IsVoid(called.ReturnType) ? 0 : 1,
             _ => -1
         };
         return pop >= 0 && push >= 0;

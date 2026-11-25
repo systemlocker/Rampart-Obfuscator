@@ -5,15 +5,39 @@ namespace Rampart.Managed;
 
 internal static class ManagedHelperInjector
 {
-    internal static TypeDefinition Inject(ModuleDefinition module, string suffix, bool framework = false, bool hardened = false)
+    internal static TypeDefinition Inject(ModuleDefinition module, string suffix, bool framework = false, bool hardened = false,
+        bool needDecode = true, bool needVerify = true, bool needInterpret = true)
     {
-        using var sourceModule = ModuleDefinition.ReadModule(typeof(RuntimeTemplate).Assembly.Location);
+        var sourcePath = typeof(RuntimeTemplate).Assembly.Location;
+        if (string.IsNullOrEmpty(sourcePath))
+        {
+            var candidate = Path.Combine(AppContext.BaseDirectory, typeof(RuntimeTemplate).Assembly.GetName().Name + ".dll");
+            if (File.Exists(candidate)) sourcePath = candidate;
+            else throw new ManagedProtectionException("MANAGED_HELPER_SOURCE_UNAVAILABLE", "Runtime helper injection requires Rampart.Core.dll to be available on disk.");
+        }
+        using var sourceModule = ModuleDefinition.ReadModule(sourcePath);
         var source = sourceModule.GetType(typeof(RuntimeTemplate).FullName!);
-        var sourceMethods = source.Methods.Select(method => hardened && method.Name == "Decode"
-            ? sourceModule.GetType(typeof(RuntimeHardenedTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Decode")
-            : framework && method.Name == "Verify"
-                ? sourceModule.GetType(typeof(FrameworkIntegrityTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Verify") : method).ToArray();
-        TypeReference ImportType(TypeReference type) => framework ? ImportFrameworkType(module, type) : ImportModernType(module, type);
+        var sourceMethods = source.Methods
+            .Where(method => (method.Name == "Decode" && needDecode)
+                || (method.Name == "Verify" && needVerify)
+                || (method.Name == "Interpret" && needInterpret))
+            .Select(method => hardened && method.Name == "Decode"
+                ? sourceModule.GetType(typeof(RuntimeHardenedTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Decode")
+                : framework && method.Name == "Verify"
+                    ? sourceModule.GetType(typeof(FrameworkIntegrityTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Verify") : method).ToArray();
+        var target = new TypeDefinition("", "<Rampart_" + suffix + ">", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed,
+            module.TypeSystem.Object);
+        module.Types.Add(target);
+        TypeReference ImportType(TypeReference type)
+        {
+            // Remap typeof(RuntimeTemplate/RuntimeHardenedTemplate/FrameworkIntegrityTemplate)
+            // tokens inside helper bodies so helpers resolve their own containing assembly.
+            if (type.FullName == typeof(RuntimeTemplate).FullName
+                || type.FullName == typeof(RuntimeHardenedTemplate).FullName
+                || type.FullName == typeof(FrameworkIntegrityTemplate).FullName)
+                return target;
+            return framework ? ImportFrameworkType(module, type) : ImportModernType(module, type);
+        }
         MethodReference ImportMethod(MethodReference reference)
         {
             if (reference.HasGenericParameters || reference is GenericInstanceMethod)
@@ -23,17 +47,17 @@ internal static class ManagedHelperInjector
             foreach (var parameter in reference.Parameters) imported.Parameters.Add(new ParameterDefinition(ImportType(parameter.ParameterType)));
             return imported;
         }
-        var target = new TypeDefinition("", "<Rampart_" + suffix + ">", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed,
-            module.TypeSystem.Object);
-        module.Types.Add(target);
         var fields = new Dictionary<FieldDefinition, FieldDefinition>();
-        foreach (var field in source.Fields)
+        if (needInterpret)
         {
-            var copy = new FieldDefinition(field.Name, field.Attributes, ImportType(field.FieldType));
-            foreach (var attribute in field.CustomAttributes)
-                if (attribute.AttributeType.FullName == "System.ThreadStaticAttribute")
-                    copy.CustomAttributes.Add(new CustomAttribute(ImportMethod(attribute.Constructor)));
-            target.Fields.Add(copy); fields.Add(field, copy);
+            foreach (var field in source.Fields)
+            {
+                var copy = new FieldDefinition(field.Name, field.Attributes, ImportType(field.FieldType));
+                foreach (var attribute in field.CustomAttributes)
+                    if (attribute.AttributeType.FullName == "System.ThreadStaticAttribute")
+                        copy.CustomAttributes.Add(new CustomAttribute(ImportMethod(attribute.Constructor)));
+                target.Fields.Add(copy); fields.Add(field, copy);
+            }
         }
         var methods = new Dictionary<MethodDefinition, MethodDefinition>();
         foreach (var method in sourceMethods)
@@ -140,6 +164,7 @@ internal static class ManagedHelperInjector
         // This closed list is the helper's complete CLR 4 dependency surface.
         // New helper APIs must acquire Framework fixtures before entering it.
         if (type.FullName is not ("System.IO.Stream" or "System.Reflection.Assembly" or "System.IDisposable"
+            or "System.Type" or "System.RuntimeTypeHandle"
             or "System.Security.Cryptography.SHA256" or "System.Security.Cryptography.HashAlgorithm"
             or "System.Convert" or "System.BitConverter" or "System.IO.InvalidDataException" or "System.Array" or "System.ThreadStaticAttribute"))
             throw new ManagedProtectionException("MANAGED_HELPER_REFERENCE", "The runtime helper has an unsupported Framework reference.");

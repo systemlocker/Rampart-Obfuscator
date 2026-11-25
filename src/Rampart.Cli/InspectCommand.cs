@@ -2,9 +2,9 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Rampart.Config;
 using Rampart.Engine;
+using Rampart.NativeAot;
 using Rampart.Pe;
 using Rampart.Targets;
-using Rampart.NativeAot;
 
 namespace Rampart.Cli;
 
@@ -12,24 +12,39 @@ internal static class InspectCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Contains("--help", StringComparer.Ordinal))
+        if (args.Contains("--help", StringComparer.Ordinal) || args.Contains("-h", StringComparer.Ordinal))
         {
             Console.WriteLine("usage: rampart inspect <file> [--json]");
             return 0;
         }
 
-        bool json = args.Contains("--json", StringComparer.Ordinal);
-        var positional = args.Where(a => a != "--json").ToList();
+        bool json = false;
+        var positional = new List<string>();
+        foreach (string arg in args)
+        {
+            if (arg == "--json") json = true;
+            else if (arg.StartsWith("-", StringComparison.Ordinal))
+                throw new ArgumentException($"Unknown option '{arg}'.");
+            else
+                positional.Add(arg);
+        }
         if (positional.Count != 1)
             throw new ArgumentException("inspect requires exactly one PE file.");
 
         string path = Path.GetFullPath(positional[0]);
         byte[] bytes = ProtectionPipeline.ReadInput(path);
         var classification = TargetClassifier.Classify(bytes, path);
-        if (classification.Target.Kind != ProtectionTargetKind.NativePe)
+        bool inspectNativePe = classification.Target.Kind == ProtectionTargetKind.NativePe
+            || (classification.Target.Kind == ProtectionTargetKind.AlreadyProtected && HasRampartSection(bytes));
+        if (!inspectNativePe)
         {
-            object? audit = classification.Target.Kind == ProtectionTargetKind.NativeAot && classification.CanProtect
-                ? new NativeAotBackend().Audit(bytes, new ProtectionSettings { Seed = 0 }) : null;
+            object? audit = null;
+            string? auditError = null;
+            if (classification.Target.Kind == ProtectionTargetKind.NativeAot && classification.CanProtect)
+            {
+                try { audit = new NativeAotBackend().Audit(bytes, new ProtectionSettings { Seed = 0 }); }
+                catch (NativeAotCompatibilityException error) { auditError = error.Message; }
+            }
             if (json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new
@@ -39,6 +54,7 @@ internal static class InspectCommand
                     Sha256 = Convert.ToHexString(SHA256.HashData(bytes)),
                     Classification = classification,
                     NativeAotAudit = audit,
+                    NativeAotAuditError = auditError,
                 }, ProtectionSettingsJson.Options));
             }
             else
@@ -47,6 +63,7 @@ internal static class InspectCommand
                 Console.WriteLine($"disposition: {classification.Disposition}");
                 Console.WriteLine($"reason:      {classification.ReasonCode}");
                 foreach (string evidence in classification.Evidence) Console.WriteLine($"  {evidence}");
+                if (auditError is not null) Console.WriteLine($"audit error: {auditError}");
                 if (classification.Target.Kind is ProtectionTargetKind.FrameworkDependentAppHost or ProtectionTargetKind.SelfContainedAppHost)
                     Console.WriteLine("Protect the application DLL before publishing this host.");
             }
@@ -124,5 +141,11 @@ internal static class InspectCommand
         foreach (var directory in directories)
             Console.WriteLine($"  {directory.Name,-14} RVA {directory.Rva:X8} size {directory.Size:X8}");
         return 0;
+    }
+
+    private static bool HasRampartSection(byte[] bytes)
+    {
+        try { return PeImage.Load(bytes).Sections.Any(s => s.Name == ".rmpt"); }
+        catch (Exception ex) when (ex is BadImageFormatException or InvalidOperationException or ArgumentException) { return false; }
     }
 }

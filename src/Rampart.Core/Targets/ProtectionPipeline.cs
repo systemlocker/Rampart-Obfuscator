@@ -5,17 +5,25 @@ namespace Rampart.Targets;
 /// <summary>Dispatches only after read-only target admission and policy checks.</summary>
 public sealed class ProtectionPipeline
 {
-    public ProtectionPlan Plan(byte[] input, ProtectionSettings settings)
+    // Keep the original overloads as real CLR signatures. Optional parameters
+    // are a source-language feature, so replacing them would break consumers
+    // that were already compiled against the 0.3.x assembly.
+    public ProtectionPlan Plan(byte[] input, ProtectionSettings settings) =>
+        Plan(input, settings, inputPath: null);
+
+    public ProtectionPlan Plan(byte[] input, ProtectionSettings settings, string? inputPath)
     {
-        var classification = TargetClassifier.Classify(input);
+        var classification = TargetClassifier.Classify(input, inputPath);
         return BackendFor(classification, settings).Plan(input, settings);
     }
 
-    public BackendProtectionResult Protect(byte[] input, ProtectionSettings settings, byte[]? symbols = null)
+    public BackendProtectionResult Protect(byte[] input, ProtectionSettings settings, byte[]? symbols = null) =>
+        Protect(input, settings, symbols, inputPath: null);
+
+    public BackendProtectionResult Protect(byte[] input, ProtectionSettings settings, byte[]? symbols, string? inputPath)
     {
-        var classification = TargetClassifier.Classify(input);
+        var classification = TargetClassifier.Classify(input, inputPath);
         IProtectionBackend backend = BackendFor(classification, settings);
-        _ = backend.Plan(input, settings);
         BackendProtectionResult result = backend.Protect(input, settings, symbols);
         backend.Validate(input, result);
         return result;

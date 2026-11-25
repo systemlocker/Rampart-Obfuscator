@@ -31,6 +31,9 @@ public sealed class NativeAotBackend
         for (int section = 0; section < snapshot.SectionCount; section++)
             allowed.Add((snapshot.SectionTableOffset + section * 40, 8));
         snapshot.Validate(output, allowed);
+        uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(output.AsSpan(snapshot.OptionalOffset + 64));
+        if (storedChecksum != PeChecksum.Compute(output))
+            throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "The transformed image PE checksum is invalid.");
     }
 
     public NativeAotReport Audit(byte[] input, ProtectionSettings settings, NativeAotProtectionOptions? options = null) =>

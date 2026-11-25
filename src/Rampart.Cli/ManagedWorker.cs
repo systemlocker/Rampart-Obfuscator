@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -24,6 +25,8 @@ internal static class ManagedWorker
             throw new ArgumentException("MANAGED_LIMITS: The worker time budget is outside the supported bounds.");
         string directory = Path.Combine(Path.GetTempPath(), "rampart-worker-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         try
         {
             File.WriteAllBytes(Path.Combine(directory, "input.dll"), input);
@@ -39,11 +42,20 @@ internal static class ManagedWorker
                 RedirectStandardError = true,
             };
             if (Path.GetFileNameWithoutExtension(start.FileName).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-                start.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+            {
+                string assemblyPath = Assembly.GetExecutingAssembly().Location;
+                if (string.IsNullOrEmpty(assemblyPath))
+                    throw new InvalidOperationException("RP_WORKER_HOST: Cannot locate the CLI assembly for the worker process.");
+                start.ArgumentList.Add(assemblyPath);
+            }
             start.ArgumentList.Add("__managed-worker");
             start.ArgumentList.Add(directory);
-            start.ArgumentList.Add(settings.Seed.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            start.Environment["DOTNET_GCHeapHardLimit"] = "18000000"; // 384 MiB, leaving room for native writer allocations.
+            start.ArgumentList.Add(settings.Seed.ToString(CultureInfo.InvariantCulture));
+            // Scale heap and working-set ceilings with the configured input size budget
+            // so valid large assemblies are not prematurely killed by a fixed 384 MiB cap.
+            long heapLimitBytes = Math.Max(384L * 1024 * 1024, (long)options.MaximumInputBytes * 4L + 128L * 1024 * 1024);
+            long workingSetLimit = Math.Max(512L * 1024 * 1024, heapLimitBytes + 256L * 1024 * 1024);
+            start.Environment["DOTNET_GCHeapHardLimit"] = heapLimitBytes.ToString("X", CultureInfo.InvariantCulture);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("RP_WORKER_START: Cannot start the managed writer.");
             var stdout = Drain(process.StandardOutput, 0);
             var stderr = Drain(process.StandardError, 128);
@@ -57,9 +69,10 @@ internal static class ManagedWorker
                     workingSet = process.WorkingSet64;
                 }
                 catch (InvalidOperationException) when (process.HasExited) { break; }
-                if (timer.ElapsedMilliseconds > options.MaximumProtectionMilliseconds || workingSet > 512L * 1024 * 1024)
+                if (timer.ElapsedMilliseconds > options.MaximumProtectionMilliseconds || workingSet > workingSetLimit)
                 {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                    catch (InvalidOperationException) { /* Process exited between check and kill. */ }
                     process.WaitForExit();
                     throw new InvalidOperationException("RP_WORKER_LIMIT: The managed writer exceeded its time or memory budget; no output was promoted.");
                 }
@@ -79,11 +92,14 @@ internal static class ManagedWorker
                 throw new InvalidOperationException(code + ": The managed writer rejected this input; no output was promoted." + action);
             }
             string responsePath = Path.Combine(directory, "response.json");
+            string outputPath = Path.Combine(directory, "output.dll");
+            if (!File.Exists(responsePath) || !File.Exists(outputPath))
+                throw new InvalidOperationException("RP_WORKER_FAILED: The managed writer exited without producing output artifacts.");
             if (new FileInfo(responsePath).Length > 64L * 1024 * 1024)
                 throw new InvalidOperationException("RP_WORKER_RESPONSE_LIMIT: The managed evidence exceeds the response limit.");
             var response = JsonSerializer.Deserialize<Response>(File.ReadAllText(responsePath), ProtectionSettingsJson.Options)
                 ?? throw new InvalidOperationException("RP_WORKER_RESPONSE: Invalid managed writer response.");
-            byte[] output = ProtectionPipeline.ReadInput(Path.Combine(directory, "output.dll"));
+            byte[] output = ProtectionPipeline.ReadInput(outputPath);
             if (response.InputSha256 != Convert.ToHexString(SHA256.HashData(input))
                 || response.OutputSha256 != Convert.ToHexString(SHA256.HashData(output)))
                 throw new InvalidOperationException("RP_WORKER_HASH: The managed writer response does not match its artifacts.");
@@ -100,8 +116,9 @@ internal static class ManagedWorker
         finally
         {
             // The directory name is generated above; no input artifact path can
-            // select what this cleanup removes.
-            Directory.Delete(directory, recursive: true);
+            // select what this cleanup removes. Never let transient cleanup locks
+            // mask the worker's result or original failure.
+            TryDeleteDirectory(directory);
         }
     }
 
@@ -112,7 +129,7 @@ internal static class ManagedWorker
             if (arguments.Length != 2) throw new ArgumentException();
             string directory = Path.GetFullPath(arguments[0]);
             if (!Path.GetFileName(directory).StartsWith("rampart-worker-", StringComparison.Ordinal)) throw new ArgumentException();
-            long seed = long.Parse(arguments[1], System.Globalization.CultureInfo.InvariantCulture);
+            long seed = long.Parse(arguments[1], CultureInfo.InvariantCulture);
             byte[] input = ProtectionPipeline.ReadInput(Path.Combine(directory, "input.dll"));
             string pdb = Path.Combine(directory, "input.pdb");
             var options = JsonSerializer.Deserialize<ManagedProtectionOptions>(File.ReadAllText(Path.Combine(directory, "options.json")), ProtectionSettingsJson.Options)
@@ -131,6 +148,22 @@ internal static class ManagedWorker
         }
         catch (ManagedProtectionException error) { Console.Error.WriteLine(error.ReasonCode); return 1; }
         catch { Console.Error.WriteLine("RP_WORKER_FAILED"); return 1; }
+    }
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+                return;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                if (attempt < 4) Thread.Sleep(50);
+            }
+        }
     }
 
     private static async Task<string> Drain(StreamReader stream, int retain)

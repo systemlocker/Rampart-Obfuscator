@@ -19,7 +19,7 @@ public static class ArtifactWriter
     {
         ArgumentNullException.ThrowIfNull(artifacts);
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var forbidden = new HashSet<string>((protectedInputs ?? []).Select(CanonicalPath), comparer);
+        var forbidden = new HashSet<string>((protectedInputs ?? []).Select(p => CanonicalPath(p, rejectLeafLink: false)), comparer);
         var paths = new HashSet<string>(comparer);
         var admitted = new List<(OutputArtifact? Artifact, string Path, bool Existed)>();
         // Validate the whole set before creating even a temporary file. Resolve
@@ -29,7 +29,7 @@ public static class ArtifactWriter
         {
             ArgumentNullException.ThrowIfNull(artifact);
             ArgumentNullException.ThrowIfNull(artifact.Bytes);
-            string path = CanonicalPath(artifact.Path);
+            string path = CanonicalPath(artifact.Path, rejectLeafLink: true);
             if (!paths.Add(path) || forbidden.Contains(path))
                 throw new IOException("RP_OUTPUT_COLLISION: An output path overlaps an input or another output.");
             string directory = System.IO.Path.GetDirectoryName(path)!;
@@ -44,7 +44,7 @@ public static class ArtifactWriter
         }
         foreach (string removal in removalPaths ?? [])
         {
-            string path = CanonicalPath(removal);
+            string path = CanonicalPath(removal, rejectLeafLink: true);
             if (!paths.Add(path) || forbidden.Contains(path))
                 throw new IOException("RP_OUTPUT_COLLISION: An output removal overlaps an input or another output.");
             if (!Directory.Exists(System.IO.Path.GetDirectoryName(path)))
@@ -93,6 +93,23 @@ public static class ArtifactWriter
         catch (Exception failure)
         {
             var recoveryFailures = new List<Exception>();
+            // File.Replace can fail after moving the original destination into its
+            // backup copy. Check the in-flight entry before rolling back earlier ones.
+            if (promoted < staged.Count)
+            {
+                var current = staged[promoted];
+                try
+                {
+                    if (current.Existed && File.Exists(current.Backup))
+                        RecoverFile(() => File.Move(current.Backup, current.Path, overwrite: true));
+                    else if (!current.Existed && File.Exists(current.Path))
+                        RecoverFile(() => File.Delete(current.Path));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    recoveryFailures.Add(error);
+                }
+            }
             for (int index = promoted - 1; index >= 0; index--)
             {
                 var entry = staged[index];
@@ -138,20 +155,40 @@ public static class ArtifactWriter
 
     private static void RecoverFile(Action operation)
     {
-        // A scanner can briefly hold a newly promoted image without delete sharing.
-        // Retrying only Windows sharing/lock failures lets rollback restore the old
-        // set; permanent errors still retain the backup and surface recovery failure.
-        // Promotion is not retried: a failed Replace can have partially moved files.
+        // A scanner or indexer can briefly hold a newly promoted image with
+        // sharing (32/33) or transient access-denied (5) errors. Retrying only
+        // those transient errors lets rollback restore the old set; permanent
+        // errors still retain the backup and surface recovery failure.
         for (int attempt = 0; ; attempt++)
         {
             try { operation(); return; }
-            catch (IOException error) when (OperatingSystem.IsWindows() && attempt < 19
-                && (error.HResult & 0xffff) is 32 or 33)
+            catch (Exception error) when (OperatingSystem.IsWindows() && attempt < 19
+                && (error is IOException && (error.HResult & 0xffff) is 32 or 33
+                    || error is UnauthorizedAccessException && (error.HResult & 0xffff) == 5))
             { Thread.Sleep(25); }
         }
     }
 
-    private static string CanonicalPath(string path)
+    private static void RejectReparsePoint(string path)
+    {
+        try
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("RP_OUTPUT_PATH: Symbolic links and reparse points are not accepted as artifact destinations.");
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Destination does not exist yet (not even as a dangling Windows reparse point).
+        }
+        if (!OperatingSystem.IsWindows())
+        {
+            var info = new FileInfo(path);
+            if (info.LinkTarget is not null)
+                throw new IOException("RP_OUTPUT_PATH: Symbolic links are not accepted as artifact destinations.");
+        }
+    }
+
+    private static string CanonicalPath(string path, bool rejectLeafLink = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         string full = System.IO.Path.GetFullPath(path);
@@ -174,6 +211,7 @@ public static class ArtifactWriter
                         && (stem[3] is >= '1' and <= '9' or '¹' or '²' or '³'))
                     throw new IOException("RP_OUTPUT_PATH: Device filenames are not accepted for artifacts.");
             }
+            if (rejectLeafLink) RejectReparsePoint(full);
             if (File.Exists(full) || Directory.Exists(full)) return ResolveWindowsPath(full);
             string? parent = System.IO.Path.GetDirectoryName(full);
             return parent is not null && Directory.Exists(parent)
@@ -183,9 +221,16 @@ public static class ArtifactWriter
         // parent directories with a bounded walk instead of treating their text
         // as the identity of the destination.
         string current = System.IO.Path.GetPathRoot(full)!;
-        foreach (string part in full[current.Length..].Split(System.IO.Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        string[] parts = full[current.Length..].Split(System.IO.Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        for (int index = 0; index < parts.Length; index++)
         {
-            current = System.IO.Path.Combine(current, part);
+            current = System.IO.Path.Combine(current, parts[index]);
+            bool isLeaf = index == parts.Length - 1;
+            if (rejectLeafLink && isLeaf)
+            {
+                RejectReparsePoint(current);
+                continue;
+            }
             FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
             if (info.Exists && info.LinkTarget is not null)
                 current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName
@@ -213,6 +258,7 @@ public static class ArtifactWriter
             throw new IOException("RP_OUTPUT_PATH: An artifact path could not be resolved.", new Win32Exception(Marshal.GetLastWin32Error()));
         string resolved = buffer.ToString();
         return resolved.StartsWith("\\\\?\\UNC\\", StringComparison.OrdinalIgnoreCase) ? "\\\\" + resolved[8..]
+            : resolved.StartsWith("\\\\?\\Volume{", StringComparison.OrdinalIgnoreCase) ? resolved
             : resolved.StartsWith("\\\\?\\", StringComparison.Ordinal) ? resolved[4..] : resolved;
     }
 

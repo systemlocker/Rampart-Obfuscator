@@ -41,20 +41,30 @@ public static class NativeLeafCompiler
         if (source.Length is < 5 or > 512)
             return Fail("function size is outside the 5..512-byte limit", out reason);
 
-        // Conventional padding following the terminal RET is not a second body.
-        int end = source.Length;
-        while (end > 0 && source[end - 1] is 0x90 or 0xCC) end--;
-        if (end == 0 || source[end - 1] != 0xC3)
-            return Fail("requires a terminal RET and optional NOP/INT3 padding", out reason);
-        source = source[..end];
+        // Decode forward so trailing 0x90/0xCC linker padding after the terminal
+        // RET is recognized without misreading immediate bytes inside instructions.
         var instructions = new List<Instruction>();
         for (int offset = 0; offset < source.Length;)
         {
-            if (!TryDecode(source, offset, out Instruction? instruction))
-                return Fail($"unsupported or truncated instruction at +0x{offset:X}", out reason);
-            instructions.Add(instruction!);
-            offset = instruction!.End;
+            if (TryDecode(source, offset, out Instruction? instruction))
+            {
+                instructions.Add(instruction!);
+                offset = instruction!.End;
+                continue;
+            }
+            if (instructions.Count > 0 && instructions[^1].Kind == Kind.Return
+                && IsTrailingPadding(source[offset..]))
+                break;
+            return Fail($"unsupported or truncated instruction at +0x{offset:X}", out reason);
         }
+        while (instructions.Count > 1 && instructions[^1].Kind == Kind.Plain
+            && instructions[^1].Bytes.Length == 1 && instructions[^1].Bytes[0] == 0x90
+            && instructions[^2].Kind == Kind.Return)
+        {
+            instructions.RemoveAt(instructions.Count - 1);
+        }
+        if (instructions.Count == 0 || instructions[^1].Kind != Kind.Return)
+            return Fail("requires a terminal RET and optional NOP/INT3 padding", out reason);
         var byOffset = instructions.Select((instruction, index) => (instruction.Offset, index))
             .ToDictionary(item => item.Offset, item => item.index);
         var successors = new List<int>[instructions.Count];
@@ -288,4 +298,12 @@ public static class NativeLeafCompiler
 
     private static string Label(int offset) => $"native_{offset:X}";
     private static bool Fail(string message, out string reason) { reason = message; return false; }
+
+    private static bool IsTrailingPadding(ReadOnlySpan<byte> tail)
+    {
+        foreach (byte b in tail)
+            if (b is not (0x90 or 0xCC))
+                return false;
+        return true;
+    }
 }

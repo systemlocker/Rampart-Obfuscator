@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using Rampart.Targets;
 
 namespace Rampart.NativeAot;
 
@@ -17,7 +18,7 @@ public static class NativeAotMarker
         if (image.Length < Offset + Magic.Length || !image.AsSpan(Offset, Magic.Length).SequenceEqual(Magic)) return false;
         if (!TryBounds(image, out int optional) || image.Length < Offset + Length) return true;
         uint encodedLength = BinaryPrimitives.ReadUInt32LittleEndian(image.AsSpan(Offset + 8));
-        if (encodedLength < optional + 152 || encodedLength > image.Length || encodedLength > 256 * 1024 * 1024) return true;
+        if (encodedLength < optional + 152 || encodedLength > image.Length || encodedLength > TargetClassifier.MaximumInputBytes) return true;
         if (BinaryPrimitives.ReadUInt32LittleEndian(image.AsSpan(Offset + 12)) != 0) return true;
         int originalLength = (int)encodedLength;
         uint certificateOffset = BinaryPrimitives.ReadUInt32LittleEndian(image.AsSpan(optional + 144));
@@ -53,9 +54,13 @@ public static class NativeAotMarker
         optional = 0;
         if (image.Length < 64 || image[0] != 'M' || image[1] != 'Z') return false;
         int pe = BinaryPrimitives.ReadInt32LittleEndian(image.AsSpan(60));
-        if (pe < Offset + Length || pe > image.Length - 176 || BinaryPrimitives.ReadUInt32LittleEndian(image.AsSpan(pe)) != 0x4550) return false;
+        if (pe < Offset + Length || pe > image.Length - 24 || BinaryPrimitives.ReadUInt32LittleEndian(image.AsSpan(pe)) != 0x4550) return false;
+        int sizeOfOptionalHeader = BinaryPrimitives.ReadUInt16LittleEndian(image.AsSpan(pe + 20));
+        if (sizeOfOptionalHeader < 152 || pe > image.Length - 24 - sizeOfOptionalHeader) return false;
         optional = pe + 24;
-        return BinaryPrimitives.ReadUInt16LittleEndian(image.AsSpan(optional)) == 0x20b;
+        if (BinaryPrimitives.ReadUInt16LittleEndian(image.AsSpan(optional)) != 0x20b) return false;
+        uint numberOfRvaAndSizes = BinaryPrimitives.ReadUInt32LittleEndian(image.AsSpan(optional + 108));
+        return numberOfRvaAndSizes >= 5;
     }
 
     private static byte[] Digest(ReadOnlySpan<byte> image, int optional)

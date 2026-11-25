@@ -89,6 +89,7 @@ internal static class ManagedExpressionVm
         il.Emit(OpCodes.Ldstr, new string(encoded)); il.Emit(OpCodes.Ldc_I4, key);
         foreach (var parameter in method.Parameters) il.Emit(OpCodes.Ldarg, parameter);
         il.Emit(OpCodes.Call, helper); il.Emit(OpCodes.Ret);
+        ManagedIlVerifier.UpdateMaxStackSize(method);
         return true;
     }
 
@@ -151,6 +152,7 @@ internal static class ManagedExpressionVm
         il.Append(next); il.Emit(OpCodes.Ldc_I4_3); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, pc);
         il.Append(check); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Callvirt, length); il.Emit(OpCodes.Blt, entry);
         Register(0); il.Emit(OpCodes.Ret);
+        ManagedIlVerifier.UpdateMaxStackSize(result);
         general.DeclaringType.Methods.Add(result);
         return result;
     }

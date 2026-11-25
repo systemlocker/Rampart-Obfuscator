@@ -34,15 +34,19 @@ public sealed class StaticDecodeDenialPass
         for (int index = 0; index < LightGadgetCount; index++)
         {
             Span<byte> gadget = section.Data.AsSpan(index * GadgetSize, GadgetSize);
+            // Restrict register operands to volatile EAX/ECX/EDX (0..2) so neither
+            // ESP nor nonvolatile registers appear in the synthetic gadget bodies.
+            int incReg = ctx.Rng.Next(0, 3);
+            int xorReg = ctx.Rng.Next(0, 3);
             gadget[0] = 0xEB;
             gadget[1] = 0xFF; // jmp -1: target is byte 1, inside this instruction
-            gadget[2] = (byte)(0xC0 + ctx.Rng.Next(0, 8)); // FF /0: inc r32
+            gadget[2] = (byte)(0xC0 + incReg); // FF /0: inc eax/ecx/edx
             gadget[3] = 0xC3; // ret
 
             // A second valid, independently discoverable entry increases the
             // disagreement without making the stream unbounded.
             gadget[8] = 0x31;
-            gadget[9] = (byte)(0xC0 + ctx.Rng.Next(0, 8)); // xor r32,r32
+            gadget[9] = (byte)(0xC0 + xorReg * 9); // xor r32, r32 (reg == rm)
             gadget[10] = 0xC3;
         }
 

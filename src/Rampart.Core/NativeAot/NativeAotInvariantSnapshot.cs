@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Rampart.Engine;
 using Rampart.Pe;
+using Rampart.Targets;
 
 namespace Rampart.NativeAot;
 
@@ -33,10 +34,14 @@ public sealed class NativeAotInvariantSnapshot
         {
             var directory = pe.Directory(index);
             if (directory.Size == 0) continue;
-            int offset = index == DataDir.Security ? checked((int)directory.RelativeVirtualAddress) : pe.RvaToOffset(directory.RelativeVirtualAddress);
+            int offset = index == DataDir.Security
+                || (index == DataDir.BoundImport && directory.RelativeVirtualAddress < pe.SizeOfHeaders)
+                ? checked((int)directory.RelativeVirtualAddress)
+                : pe.RvaToOffset(directory.RelativeVirtualAddress);
             ranges.Add(new(names[index], offset, checked((int)directory.Size), Hash(image.AsSpan(offset, checked((int)directory.Size)))));
         }
-        int rawEnd = checked((int)pe.Sections.Max(section => (ulong)section.PointerToRawData + section.SizeOfRawData));
+        ulong maxSectionEnd = pe.Sections.Max(section => (ulong)section.PointerToRawData + section.SizeOfRawData);
+        int rawEnd = checked((int)Math.Max((ulong)pe.SizeOfHeaders, maxSectionEnd));
         if (rawEnd < image.Length) ranges.Add(new("overlay", rawEnd, image.Length - rawEnd, Hash(image.AsSpan(rawEnd))));
         OwnedRanges = ranges;
     }
@@ -44,7 +49,7 @@ public sealed class NativeAotInvariantSnapshot
     public static NativeAotInvariantSnapshot Capture(byte[] image)
     {
         ArgumentNullException.ThrowIfNull(image);
-        if (image.Length > 256 * 1024 * 1024) throw Error("Image exceeds the 256 MiB validation limit.");
+        if (image.Length > TargetClassifier.MaximumInputBytes) throw Error("Image exceeds the supported validation limit.");
         try
         {
             PeImage pe = ValidateImage(image);
@@ -120,6 +125,11 @@ public sealed class NativeAotInvariantSnapshot
                 if ((ulong)directory.RelativeVirtualAddress + directory.Size > (ulong)image.Length || directory.RelativeVirtualAddress % 8 != 0)
                     throw Error("The certificate table has invalid bounds.");
             }
+            else if (index == DataDir.BoundImport && directory.RelativeVirtualAddress < pe.SizeOfHeaders)
+            {
+                if ((ulong)directory.RelativeVirtualAddress + directory.Size > pe.SizeOfHeaders)
+                    throw Error("The bound import directory exceeds PE headers.");
+            }
             else EnsureBacked(pe, directory.RelativeVirtualAddress, directory.Size);
         }
         var exceptionDirectory = pe.Directory(DataDir.Exception);
@@ -193,7 +203,9 @@ public sealed class NativeAotInvariantSnapshot
                 // A global budget prevents thousands of descriptors from each
                 // aliasing the same long thunk array and multiplying allocations.
                 if (++totalThunks > MaximumImportThunks) throw Error("The image exceeds the aggregate import-thunk limit.");
-                ulong value = pe.ReadU64(checked(lookup + index * 8));
+                uint lookupRva = checked(lookup + index * 8);
+                EnsureBacked(pe, lookupRva, 8);
+                ulong value = pe.ReadU64(lookupRva);
                 if (value == 0) break;
                 EnsureBacked(pe, checked(iat + index * 8), 8);
                 if ((value & 0x8000000000000000UL) == 0)
@@ -212,13 +224,24 @@ public sealed class NativeAotInvariantSnapshot
         var directory = pe.Directory(DataDir.BoundImport);
         for (uint cursor = 0; !directory.IsEmpty && cursor + 8 <= directory.Size;)
         {
-            byte[] descriptor = pe.ReadRva(checked(directory.RelativeVirtualAddress + cursor), 8);
+            byte[] descriptor = pe.ReadHeaderOrRva(checked(directory.RelativeVirtualAddress + cursor), 8);
             uint timestamp = BinaryPrimitives.ReadUInt32LittleEndian(descriptor);
             ushort name = BinaryPrimitives.ReadUInt16LittleEndian(descriptor.AsSpan(4));
             ushort forwarders = BinaryPrimitives.ReadUInt16LittleEndian(descriptor.AsSpan(6));
             if (timestamp == 0 && name == 0 && forwarders == 0) return;
             if (name >= directory.Size) throw Error("A bound import name is outside its directory.");
-            ValidateName(pe, checked(directory.RelativeVirtualAddress + name));
+            uint nameRva = checked(directory.RelativeVirtualAddress + name);
+            if (nameRva < pe.SizeOfHeaders)
+            {
+                int remaining = checked((int)Math.Min(4096u, directory.Size - name));
+                byte[] headerSlice = pe.ReadHeaderOrRva(nameRva, remaining);
+                if (headerSlice.AsSpan().IndexOf((byte)0) < 0)
+                    throw Error("A bound import name exceeds its directory bounds.");
+            }
+            else
+            {
+                ValidateName(pe, nameRva);
+            }
             cursor = checked(cursor + 8u + (uint)forwarders * 8u);
         }
     }

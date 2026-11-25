@@ -78,6 +78,8 @@ public static class RuntimeDetectionState
         string labelPrefix)
     {
         ArgumentNullException.ThrowIfNull(asm);
+        if (taintSession && statePointer == Reg.Rcx)
+            throw new ArgumentException("Session taint clobbers RCX and cannot use RCX as the state pointer.", nameof(statePointer));
         if (kind == RuntimeDetectionKind.None || !IsSingleBit((ulong)kind))
             throw new ArgumentOutOfRangeException(nameof(kind), "A single detection bit is required.");
         if (string.IsNullOrWhiteSpace(labelPrefix))

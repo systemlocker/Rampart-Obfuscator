@@ -29,9 +29,13 @@ public static class NativeAotPassPolicy
         foreach (var unknown in settings.Knobs.Keys.Where(id => !catalog.TryGet(id, out _)).Order(StringComparer.Ordinal))
             result.Add(new(unknown, settings.Knobs[unknown], ProtectionLevel.Off, NativeAotPassDisposition.Blocked,
                 NativeAotEvidenceStatus.Rejected, "NAOT_UNKNOWN_KNOB", "The protection identifier is not recognized."));
+        bool offPreset = string.Equals(settings.Preset, "off", StringComparison.OrdinalIgnoreCase);
         foreach (KnobDef knob in catalog.All)
         {
-            ProtectionLevel requested = settings.LevelOf(knob);
+            bool explicitRequest = settings.Knobs.TryGetValue(knob.Id, out var explicitLevel);
+            ProtectionLevel requested = explicitRequest
+                ? explicitLevel
+                : offPreset ? ProtectionLevel.Off : settings.LevelOf(knob);
             var disposition = Disposition(knob.Id);
             if (!Enum.IsDefined(requested))
             {
@@ -45,25 +49,29 @@ public static class NativeAotPassPolicy
                     "NAOT_DISABLED", "Disabled by configuration."));
                 continue;
             }
-            bool explicitRequest = settings.Knobs.ContainsKey(knob.Id);
             if (disposition != NativeAotPassDisposition.Adapt)
             {
                 result.Add(new(knob.Id, requested, ProtectionLevel.Off, disposition,
                     explicitRequest || strict ? NativeAotEvidenceStatus.Rejected : NativeAotEvidenceStatus.Skipped,
                     disposition == NativeAotPassDisposition.RequiresRuntimeMetadataProof ? "NAOT_RUNTIME_OWNERSHIP_REQUIRED" : "NAOT_KNOB_UNSUPPORTED",
-                    "The NativeAOT backend preserves runtime code, initialization, and runtime-owned data."));
+                    !explicitRequest && strict
+                        ? "Strict compatibility rejected a preset-enabled protection; set Preset to 'off' and select only supported NativeAOT options."
+                        : "The NativeAOT backend preserves runtime code, initialization, and runtime-owned data."));
                 continue;
             }
             // The native Light header pass changes precisely six identity bytes. Symbol
             // hygiene is deliberately narrower than the native pass at every level.
             bool downgrade = requested > ProtectionLevel.Light;
+            string detail = knob.Id == "packaging.header-disguise"
+                ? "Only COFF timestamp and linker version are eligible; export and debug timestamps are preserved."
+                : "Only DOS-stub content and section names are eligible; debug records, PDB paths, and COFF tables are preserved.";
+            if (downgrade && !explicitRequest && strict)
+                detail = "Strict compatibility rejected a preset downgrade; set Preset to 'off' or explicitly request Light. " + detail;
             result.Add(new(knob.Id, requested, downgrade && (explicitRequest || strict) ? ProtectionLevel.Off : ProtectionLevel.Light,
                 disposition, downgrade && (explicitRequest || strict) ? NativeAotEvidenceStatus.Rejected
                     : downgrade ? NativeAotEvidenceStatus.Downgraded : NativeAotEvidenceStatus.Planned,
                 downgrade ? "NAOT_LEVEL_UNSUPPORTED" : "NAOT_IMAGE_ONLY",
-                knob.Id == "packaging.header-disguise"
-                    ? "Only COFF timestamp and linker version are eligible; export and debug timestamps are preserved."
-                    : "Only DOS-stub content and section names are eligible; debug records, PDB paths, and COFF tables are preserved."));
+                detail));
         }
         if (settings.Rules.Count != 0 || settings.IncludeSymbols.Count != 0 || settings.ExcludeSymbols.Count != 0 || settings.IncludeRvaRanges.Count != 0)
             result.Add(new("selection", ProtectionLevel.Light, ProtectionLevel.Off, NativeAotPassDisposition.Blocked,

@@ -49,11 +49,20 @@ public static partial class SymbolLoader
             .ToList();
     }
 
-    public static List<SymbolRecord> ParseJson(string json) =>
-        JsonSerializer.Deserialize<List<SymbolRecord>>(json, new JsonSerializerOptions
+    public static List<SymbolRecord> ParseJson(string json)
+    {
+        List<SymbolRecord> records = JsonSerializer.Deserialize<List<SymbolRecord>>(json, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
         }) ?? [];
+        foreach (SymbolRecord record in records)
+        {
+            if (record.EndRva is { } end && end < record.StartRva)
+                throw new FormatException(
+                    $"Symbol '{record.Name}' has EndRva ({end:X8}) smaller than StartRva ({record.StartRva:X8}).");
+        }
+        return records;
+    }
 
     public static List<SymbolRecord> ParseMap(string text, PeImage image, string sourceName = "symbols.map")
     {
@@ -63,17 +72,35 @@ public static partial class SymbolLoader
             Match msvc = MsvcMapLine().Match(line);
             if (msvc.Success)
             {
-                int segment = int.Parse(msvc.Groups["segment"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-                ulong offset = ulong.Parse(msvc.Groups["offset"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-                ulong address = msvc.Groups["address"].Success
-                    ? ulong.Parse(msvc.Groups["address"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture)
-                    : 0;
-                uint rva = address >= image.ImageBase && address - image.ImageBase <= uint.MaxValue
-                    ? (uint)(address - image.ImageBase)
-                    : SegmentOffsetToRva(image, segment, offset);
+                string rawName = msvc.Groups["name"].Value;
+                // MSVC section-table lines look like "0001:00000000 00001234H .text CODE".
+                if (MsvcSectionLengthToken().IsMatch(rawName))
+                    continue;
+                if (!int.TryParse(msvc.Groups["segment"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int segment)
+                    || !ulong.TryParse(msvc.Groups["offset"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong offset))
+                    continue;
+                // Segment 0000 entries in MSVC map files are linker-defined absolute symbols.
+                if (segment == 0)
+                    continue;
+                ulong address = 0;
+                bool hasAddress = msvc.Groups["address"].Success
+                    && ulong.TryParse(msvc.Groups["address"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out address);
+                uint rva;
+                if (hasAddress && address >= image.ImageBase && address - image.ImageBase <= uint.MaxValue)
+                {
+                    rva = (uint)(address - image.ImageBase);
+                }
+                else if (TrySegmentOffsetToRva(image, segment, offset, out uint mapped))
+                {
+                    rva = mapped;
+                }
+                else
+                {
+                    continue;
+                }
                 result.Add(new SymbolRecord
                 {
-                    Name = msvc.Groups["name"].Value,
+                    Name = rawName,
                     StartRva = rva,
                     Module = NullIfWhiteSpace(msvc.Groups["module"].Value),
                     Source = sourceName,
@@ -84,12 +111,17 @@ public static partial class SymbolLoader
             Match gnu = GnuMapLine().Match(line);
             if (!gnu.Success)
                 continue;
-            ulong absolute = ulong.Parse(gnu.Groups["address"].Value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            string gnuName = gnu.Groups["name"].Value;
+            // Skip linker expressions and section-size tokens in GNU/LLD map files.
+            if (gnuName == "." || gnuName.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || gnuName == "=")
+                continue;
+            if (!ulong.TryParse(gnu.Groups["address"].Value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong absolute))
+                continue;
             if (absolute < image.ImageBase || absolute - image.ImageBase > uint.MaxValue)
                 continue;
             result.Add(new SymbolRecord
             {
-                Name = gnu.Groups["name"].Value,
+                Name = gnuName,
                 StartRva = (uint)(absolute - image.ImageBase),
                 Module = NullIfWhiteSpace(gnu.Groups["module"].Value),
                 Source = sourceName,
@@ -106,12 +138,24 @@ public static partial class SymbolLoader
 
         foreach (string line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
-            Match addressMatch = PdbAddress().Match(line);
-            if (addressMatch.Success)
+            // Real `llvm-pdbutil dump -publics` puts the symbol name on the S_PUB32
+            // header line (`1234 | S_PUB32 [size = 44] \`SymbolName\``) and its
+            // segment:offset on the next line (`flags = ..., addr = 0001:00000000`).
+            // Reset pending state at each new S_PUB32 header so unmatched records
+            // cannot bleed across entries.
+            Match pubHeader = PdbPub32Header().Match(line);
+            if (pubHeader.Success)
             {
-                address = (
-                    int.Parse(addressMatch.Groups["segment"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture),
-                    ulong.Parse(addressMatch.Groups["offset"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                address = null;
+                name = pubHeader.Groups["name"].Value.Trim();
+            }
+
+            Match addressMatch = PdbAddress().Match(line);
+            if (addressMatch.Success
+                && int.TryParse(addressMatch.Groups["segment"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int seg)
+                && ulong.TryParse(addressMatch.Groups["offset"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong off))
+            {
+                address = (seg, off);
             }
             Match nameMatch = PdbName().Match(line);
             if (nameMatch.Success)
@@ -119,12 +163,15 @@ public static partial class SymbolLoader
 
             if (address is not { } at || string.IsNullOrWhiteSpace(name))
                 continue;
-            result.Add(new SymbolRecord
+            if (TrySegmentOffsetToRva(image, at.Segment, at.Offset, out uint rva))
             {
-                Name = name,
-                StartRva = SegmentOffsetToRva(image, at.Segment, at.Offset),
-                Source = sourceName,
-            });
+                result.Add(new SymbolRecord
+                {
+                    Name = name,
+                    StartRva = rva,
+                    Source = sourceName,
+                });
+            }
             address = null;
             name = null;
         }
@@ -148,13 +195,23 @@ public static partial class SymbolLoader
 
         using var process = Process.Start(start)
             ?? throw new InvalidOperationException($"Could not start PDB reader '{tool}'.");
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(60_000))
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        // Drain stdout and stderr concurrently with WaitForExitAsync so large
+        // dumps cannot deadlock the pipe buffer and the 60s timeout is enforced.
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
+        try
         {
-            process.Kill(entireProcessTree: true);
+            Task.WhenAll(process.WaitForExitAsync(cts.Token), stdoutTask, stderrTask).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             throw new TimeoutException($"PDB reader '{tool}' did not finish within 60 seconds.");
         }
+
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"PDB reader failed with exit code {process.ExitCode}: {stderr.Trim()}");
         return ParseLlvmPdbDump(stdout, image, path);
@@ -171,10 +228,14 @@ public static partial class SymbolLoader
         }
 
         string executable = OperatingSystem.IsWindows() ? "llvm-pdbutil.exe" : "llvm-pdbutil";
-        foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "")
+        foreach (string rawDirectory in (Environment.GetEnvironmentVariable("PATH") ?? "")
                      .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
-            string candidate = Path.Combine(directory.Trim('"'), executable);
+            string directory = rawDirectory.Trim().Trim('"');
+            // Skip blank or relative PATH entries to avoid executing a binary from CWD.
+            if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
+                continue;
+            string candidate = Path.Combine(directory, executable);
             if (File.Exists(candidate))
                 return candidate;
         }
@@ -182,21 +243,35 @@ public static partial class SymbolLoader
             "PDB input requires llvm-pdbutil. Install LLVM, put llvm-pdbutil on PATH, or pass --pdb-tool <file>.");
     }
 
-    private static uint SegmentOffsetToRva(PeImage image, int segment, ulong offset)
+    private static bool TrySegmentOffsetToRva(PeImage image, int segment, ulong offset, out uint rva)
     {
-        if (segment <= 0 || segment > image.Sections.Count || offset > uint.MaxValue)
-            throw new FormatException($"Symbol address {segment:X4}:{offset:X} does not map to a PE section.");
-        return checked(image.Sections[segment - 1].VirtualAddress + (uint)offset);
+        rva = 0;
+        if (segment <= 0 || segment > image.Sections.Count)
+            return false;
+        PeImage.Section section = image.Sections[segment - 1];
+        if (offset >= section.ResolvedVirtualSize)
+            return false;
+        ulong combined = (ulong)section.VirtualAddress + offset;
+        if (combined > uint.MaxValue)
+            return false;
+        rva = (uint)combined;
+        return true;
     }
 
     private static string? NullIfWhiteSpace(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    [GeneratedRegex(@"^\s*(?<segment>[0-9A-Fa-f]{4}):(?<offset>[0-9A-Fa-f]{8,16})\s+(?<name>\S+)(?:\s+(?<address>[0-9A-Fa-f]{8,16}))?(?:\s+[fFiI])?(?:\s+(?<module>\S.*))?\s*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^\s*(?<segment>[0-9A-Fa-f]{4}):(?<offset>[0-9A-Fa-f]{8,16})\s+(?<name>\S+)(?:\s+(?<address>[0-9A-Fa-f]{8,16}))?(?:\s+[fFiI])*(?:\s+(?<module>\S.*))?\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex MsvcMapLine();
+
+    [GeneratedRegex(@"^[0-9A-Fa-f]+[Hh]$", RegexOptions.CultureInvariant)]
+    private static partial Regex MsvcSectionLengthToken();
 
     [GeneratedRegex(@"^\s*(?<address>0x[0-9A-Fa-f]+)\s+(?<name>\S+)(?:\s+(?<module>\S.*))?\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex GnuMapLine();
+
+    [GeneratedRegex(@"\bS_PUB32\b[^`]*`(?<name>[^`]+)`", RegexOptions.CultureInvariant)]
+    private static partial Regex PdbPub32Header();
 
     [GeneratedRegex(@"addr\s*=\s*(?<segment>[0-9A-Fa-f]+):(?<offset>[0-9A-Fa-f]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PdbAddress();

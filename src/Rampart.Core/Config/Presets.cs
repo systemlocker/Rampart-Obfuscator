@@ -15,16 +15,17 @@ public static class Presets
     /// <summary>Default level a preset assigns to a knob when the user has not
     /// overridden it. Runtime behavior changes and restricted transforms require
     /// explicit selection; capability ceilings are applied by settings resolution.</summary>
-    public static ProtectionLevel DefaultLevel(string preset, KnobDef knob) => preset switch
-    {
-        Light => PresetMap(knob.Group, knob.Id, 1),
-        Balanced => PresetMap(knob.Group, knob.Id, 2),
-        Heavy => PresetMap(knob.Group, knob.Id, 3),
-        Maximum => PresetMap(knob.Group, knob.Id, 4),
-        // The explicit runtime profile still respects supported level ceilings.
-        Nuclear => NuclearMap(knob.Id),
-        _ => throw new ArgumentException($"Unknown preset '{preset}'. Valid: {string.Join(", ", All)}"),
-    };
+    public static ProtectionLevel DefaultLevel(string preset, KnobDef knob) =>
+        (preset ?? "").ToLowerInvariant() switch
+        {
+            Light => PresetMap(knob.Group, knob.Id, 1),
+            Balanced => PresetMap(knob.Group, knob.Id, 2),
+            Heavy => PresetMap(knob.Group, knob.Id, 3),
+            Maximum => PresetMap(knob.Group, knob.Id, 4),
+            // The explicit runtime profile still respects supported level ceilings.
+            Nuclear => NuclearMap(knob.Id),
+            _ => throw new ArgumentException($"Unknown preset '{preset}'. Valid: {string.Join(", ", All)}"),
+        };
 
     private static ProtectionLevel PresetMap(string group, string id, int tier)
     {

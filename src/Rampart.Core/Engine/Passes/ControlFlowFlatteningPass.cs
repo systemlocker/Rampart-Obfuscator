@@ -12,7 +12,7 @@ public sealed class ControlFlowFlatteningPass
 
     public void Run(BuildContext ctx)
     {
-        foreach (var function in ctx.Functions)
+        foreach (var function in ctx.Functions.OrderBy(function => function.BeginRva))
         {
             if (ctx.LevelFor(KnobId, function) == ProtectionLevel.Off)
                 continue;
