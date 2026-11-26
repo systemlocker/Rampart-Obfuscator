@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>Rampart.Gui</RootNamespace>
+    <AssemblyName>Rampart.Gui</AssemblyName>
+    <Description>Windows desktop interface for the Rampart application protector.</Description>
+    <ApplicationIcon>Assets\rampart.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\rampart.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rampart.Core\Rampart.Core.csproj" />
+    <!-- Protection stays out of the UI process. This reference establishes the
+         build dependency; the application locates and launches the CLI worker. -->
+    <ProjectReference Include="..\Rampart.Cli\Rampart.Cli.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

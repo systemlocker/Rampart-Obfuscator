@@ -10,6 +10,13 @@ internal static class RuntimeTemplate
 {
     [ThreadStatic] private static int[]? scratch;
 
+    // Ephemeral hardened callers invoke this from a finally block. Ordinary VM
+    // callers retain the allocation and its contents for the existing hot path.
+    internal static void ClearScratch()
+    {
+        if (scratch is not null) Array.Clear(scratch, 0, scratch.Length);
+    }
+
     internal static string Decode(string resource, int offset, int length, int key, ref string? cached)
     {
         // Concurrent first calls may decode twice, but all callers publish the

@@ -114,9 +114,13 @@ public sealed class ManagedBackend
                     ManagedPreflight.Fail("MANAGED_HARDENED_RUNTIME_UNSUPPORTED", "Hardened runtime protection requires modern .NET.");
                 helper = ManagedHelperInjector.Inject(module, suffix, framework, options.HardenedRuntime, needDecode, needVerify, needInterpret);
                 if (options.HardenedRuntime)
-                    diagnostics.Add("MANAGED_HARDENED_RUNTIME: Payloads use AES-256-CBC with HMAC-SHA256; selected VM methods use independent dispatch layouts. Decoding keys ship with the application.");
+                    diagnostics.Add(options.EphemeralVmPrograms
+                        ? "MANAGED_HARDENED_RUNTIME: Payloads use AES-256-CBC with HMAC-SHA256; selected VM programs are decrypted per invocation and cleared with the interpreter stack. Decoding keys ship with the application."
+                        : "MANAGED_HARDENED_RUNTIME: Payloads use AES-256-CBC with HMAC-SHA256; selected VM methods use independent dispatch layouts. Decoding keys ship with the application.");
             }
             using var payload = new MemoryStream();
+            var decisionGuards = new ManagedDecisionGuards(module, seed);
+            var decisionGuardCount = 0;
             var counts = new int[options.Rules.Count];
             var generatedRuleHits = new bool[options.Rules.Count]; var boundaryRuleHits = new bool[options.Rules.Count];
             var work = new List<(MethodDefinition Method, List<string> Applied, List<string> Skipped, string? Owner, string[] Requested)>();
@@ -141,7 +145,9 @@ public sealed class ManagedBackend
                         bool transformed = method.Body.Instructions.Count <= options.MaximumVmInstructionCount
                             && (options.HardenedRuntime
                                 ? ManagedHardenedTransforms.Virtualize(method, helper!.Methods.Single(m => m.Name == "Interpret"),
-                                    helper.Methods.Single(m => m.Name == "Decode"), payload, resourceName, seed, identity.StableId)
+                                    helper.Methods.Single(m => m.Name == (options.EphemeralVmPrograms ? "DecodeProgram" : "Decode")),
+                                    helper.Methods.Single(m => m.Name == "ClearScratch"), payload, resourceName, seed, identity.StableId,
+                                    options.EphemeralVmPrograms)
                                 : ManagedTransforms.Virtualize(method, helper!.Methods.Single(m => m.Name == "Interpret"), seed, identity.StableId));
                         if (transformed)
                         { applied.Add("virtualize"); owner = options.HardenedRuntime ? "managed-hardened-vm" : "managed-vm"; }
@@ -174,7 +180,15 @@ public sealed class ManagedBackend
                             if (count > 0) applied.Add("strings:" + count); else if (reasons.Length == 0) skipped.Add("strings:no-sites");
                         }
                         if (selection.ControlFlow)
-                        { if (ManagedTransforms.ControlFlow(method, seed, identity.StableId)) applied.Add("control-flow"); else skipped.Add("control-flow:outside-stack-neutral-subset"); }
+                        {
+                            bool permuted = ManagedTransforms.ControlFlow(method, seed, identity.StableId);
+                            int guarded = decisionGuards.Apply(method, identity.StableId);
+                            decisionGuardCount += guarded;
+                            if (guarded > 0) applied.Add("decision-guards:" + guarded);
+                            if (permuted) applied.Add("control-flow");
+                            else if (guarded == 0) skipped.Add("control-flow:outside-stack-neutral-subset");
+                            else skipped.Add("control-flow:permutation-outside-stack-neutral-subset");
+                        }
                         if (applied.Count > 0) owner = "managed-il";
                     }
                     if (selection.Rename)
@@ -184,21 +198,25 @@ public sealed class ManagedBackend
                         else skipped.Add("rename:" + reason);
                     }
                     if (applied.Any(protection => protection.StartsWith("constants:", StringComparison.Ordinal)
-                        || protection.StartsWith("strings:", StringComparison.Ordinal) || protection is "control-flow" or "virtualize"))
+                        || protection.StartsWith("strings:", StringComparison.Ordinal)
+                        || protection.StartsWith("decision-guards:", StringComparison.Ordinal)
+                        || protection is "control-flow" or "virtualize"))
                         ManagedTransforms.ExpandBranches(method);
                     ManagedIlVerifier.Validate(method);
                 }
-                if (options.RequireVirtualization && selection.Included && selection.Vm && !applied.Contains("virtualize"))
+                if ((options.RequireVirtualization || options.EphemeralVmPrograms) && selection.Included && selection.Vm && !applied.Contains("virtualize"))
                     ManagedPreflight.Fail("MANAGED_VM_REQUIRED", "A method selected for required virtualization is outside the supported subset: " + identity.Signature);
                 work.Add((method, applied, skipped, owner, Requested(selection, options.Virtualize)));
                 if (timer.ElapsedMilliseconds > options.MaximumProtectionMilliseconds)
                     ManagedPreflight.Fail("MANAGED_TIME_BUDGET", "Managed protection exceeded its configured time budget.");
             }
-            if (options.RequireVirtualization && !work.Any(item => item.Applied.Contains("virtualize")))
+            if ((options.RequireVirtualization || options.EphemeralVmPrograms) && !work.Any(item => item.Applied.Contains("virtualize")))
                 ManagedPreflight.Fail("MANAGED_VM_SELECTION_EMPTY", "No included method matched the required virtualization selection.");
+            if (decisionGuardCount > 0)
+                diagnostics.Add($"MANAGED_DECISION_GUARDS: Replaced {decisionGuardCount} Boolean/int32 branch sites with per-site seeded dispatch.");
             for (var i = 0; i < counts.Length; i++)
             {
-                if (options.RequireVirtualization && counts[i] == 0 && options.Rules[i].Virtualize == true && options.Rules[i].Include != false)
+                if ((options.RequireVirtualization || options.EphemeralVmPrograms) && counts[i] == 0 && options.Rules[i].Virtualize == true && options.Rules[i].Include != false)
                     ManagedPreflight.Fail("MANAGED_VM_RULE_NO_MATCH", "A required virtualization rule matched no methods: " + i);
                 if (counts[i] == 0) diagnostics.Add($"MANAGED_RULE_NO_MATCH: Rule {i} matched no methods.");
                 if (generatedRuleHits[i]) diagnostics.Add($"MANAGED_RULE_GENERATED_CODE: Rule {i} implicitly matched compiler-generated methods.");

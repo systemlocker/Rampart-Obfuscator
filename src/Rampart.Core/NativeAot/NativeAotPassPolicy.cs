@@ -9,6 +9,8 @@ public static class NativeAotPassPolicy
     {
         "packaging.header-disguise" => NativeAotPassDisposition.Adapt,
         "packaging.symbol-scrub" => NativeAotPassDisposition.Adapt,
+        "integrity.measurement-channels" => NativeAotPassDisposition.Adapt,
+        "response.tool-response" => NativeAotPassDisposition.Adapt,
         "packaging.import-concealment" or "packaging.ep-confusion" or "packaging.packer"
             or "strings.encryption" or "strings.anti-instrumentation" or "strings.coverage"
             or "code-transformation.junk-insertion" or "code-transformation.mba-constants"
@@ -59,12 +61,16 @@ public static class NativeAotPassPolicy
                         : "The NativeAOT backend preserves runtime code, initialization, and runtime-owned data."));
                 continue;
             }
-            // The native Light header pass changes precisely six identity bytes. Symbol
-            // hygiene is deliberately narrower than the native pass at every level.
+            // NativeAOT adaptations intentionally expose only one verified level.
             bool downgrade = requested > ProtectionLevel.Light;
-            string detail = knob.Id == "packaging.header-disguise"
-                ? "Only COFF timestamp and linker version are eligible; export and debug timestamps are preserved."
-                : "Only DOS-stub content and section names are eligible; debug records, PDB paths, and COFF tables are preserved.";
+            string detail = knob.Id switch
+            {
+                "packaging.header-disguise" => "Only COFF timestamp and linker version are eligible; export and debug timestamps are preserved.",
+                "packaging.symbol-scrub" => "Only DOS-stub content and section names are eligible; debug records, PDB paths, and COFF tables are preserved.",
+                "integrity.measurement-channels" => "Adds a one-time startup measurement over relocation-stable NativeAOT runtime-function code. This opt-in scan adds startup work proportional to measured code size.",
+                "response.tool-response" => "Binds a detected NativeAOT startup integrity change to a clean process exit.",
+                _ => throw new InvalidOperationException("Unexpected NativeAOT adaptation."),
+            };
             if (downgrade && !explicitRequest && strict)
                 detail = "Strict compatibility rejected a preset downgrade; set Preset to 'off' or explicitly request Light. " + detail;
             result.Add(new(knob.Id, requested, downgrade && (explicitRequest || strict) ? ProtectionLevel.Off : ProtectionLevel.Light,
@@ -72,6 +78,19 @@ public static class NativeAotPassPolicy
                     : downgrade ? NativeAotEvidenceStatus.Downgraded : NativeAotEvidenceStatus.Planned,
                 downgrade ? "NAOT_LEVEL_UNSUPPORTED" : "NAOT_IMAGE_ONLY",
                 detail));
+        }
+        int responseIndex = result.FindIndex(pass => pass.Knob == "response.tool-response");
+        bool measurementEnabled = result.Any(pass => pass.Knob == "integrity.measurement-channels"
+            && pass.Effective != ProtectionLevel.Off && pass.Status != NativeAotEvidenceStatus.Rejected);
+        if (responseIndex >= 0 && result[responseIndex].Effective != ProtectionLevel.Off && !measurementEnabled)
+        {
+            result[responseIndex] = result[responseIndex] with
+            {
+                Effective = ProtectionLevel.Off,
+                Status = NativeAotEvidenceStatus.Rejected,
+                ReasonCode = "NAOT_RESPONSE_SOURCE_REQUIRED",
+                Detail = "NativeAOT clean exit requires integrity.measurement-channels as its detection source.",
+            };
         }
         if (settings.Rules.Count != 0 || settings.IncludeSymbols.Count != 0 || settings.ExcludeSymbols.Count != 0 || settings.IncludeRvaRanges.Count != 0)
             result.Add(new("selection", ProtectionLevel.Light, ProtectionLevel.Off, NativeAotPassDisposition.Blocked,

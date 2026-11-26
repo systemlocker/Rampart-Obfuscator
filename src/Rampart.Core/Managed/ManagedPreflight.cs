@@ -18,6 +18,10 @@ internal static class ManagedPreflight
 
     internal static void Validate(byte[] image, ManagedProtectionOptions options)
     {
+        if (options.EphemeralVmPrograms && !options.HardenedRuntime)
+            Fail("MANAGED_EPHEMERAL_VM_REQUIRES_HARDENED", "Ephemeral VM programs require the hardened runtime.");
+        if (options.EphemeralVmPrograms && !options.Rules.Any(rule => rule.Virtualize == true && rule.Include != false))
+            Fail("MANAGED_EPHEMERAL_VM_SELECTION_REQUIRED", "Ephemeral VM programs require at least one enabling virtualization rule.");
         if (options.MaximumInputBytes is < 1024 or > 268435456 || options.MaximumMethods is < 1 or > 200000
             || options.MaximumMethodBytes is < 1 or > 4194304 || options.MaximumMetadataRows is < 1 or > 2000000
             || options.MaximumOutputGrowthPercent is < 0 or > 1000)

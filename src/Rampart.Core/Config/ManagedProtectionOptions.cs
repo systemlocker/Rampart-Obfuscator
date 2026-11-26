@@ -14,6 +14,11 @@ public sealed class ManagedProtectionOptions
     /// Intended for modern .NET, including transformation before NativeAOT compilation.
     /// Embedded decoding keys do not provide confidentiality from the running application.</summary>
     public bool HardenedRuntime { get; set; }
+    /// <summary>Decrypt each hardened VM program for one invocation, then clear the
+    /// decoded program and interpreter stack in a finally block. This reduces
+    /// plaintext residency at substantial per-call cost; it does not protect an
+    /// application from code already executing inside its process.</summary>
+    public bool EphemeralVmPrograms { get; set; }
     /// <summary>Reject instead of retaining a selected method that cannot be virtualized.
     /// At least one method must be explicitly selected and successfully virtualized.</summary>
     public bool RequireVirtualization { get; set; }

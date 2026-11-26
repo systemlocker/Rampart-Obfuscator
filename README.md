@@ -1,14 +1,29 @@
 # Rampart
 
-Rampart is an experimental, open-source protector for Windows applications. It
-supports native x64 PE executables, pure managed IL assemblies, and eligible
-Windows x64 NativeAOT publish outputs. Reproducible per-build transforms keep the
+Rampart is a stable, open-source protector for Windows applications. It supports
+native x64 PE executables, pure managed IL assemblies, and eligible Windows x64
+NativeAOT publish outputs. Reproducible per-build transforms keep the
 configuration and resulting changes inspectable.
 
 Protect copies of your binaries, keep the original build artifacts, and test
 protected output on every Windows version you
 support. Obfuscation does not replace secure application design or server-side
 validation of sensitive operations.
+
+## Stability and support
+
+The 1.x line is supported for production use within the target and protection
+limits documented here and in [Protection coverage](FEATURES.md). `Rampart.Core`
+public APIs, versioned configuration, documented CLI options, and documented
+MSBuild properties remain backward compatible across 1.x minor and patch
+releases. Breaking changes are reserved for a new major version; additions and
+stricter rejection of malformed or unsafe inputs may ship in 1.x.
+
+The latest 1.x minor release receives correctness and security fixes. Earlier
+1.x releases remain covered by the compatibility contract, but fixes are shipped
+forward rather than backported to every minor. Protected output is not expected
+to remain byte-identical across Rampart versions, so rebuild from original
+artifacts and rerun application compatibility tests when upgrading.
 
 ## Supported capabilities
 
@@ -59,7 +74,8 @@ requirements, and compatibility limits.
 The native PE backend targets PE32+ AMD64 executables and preserves ASLR
 relocations and overlays. The managed backend accepts supported pure-IL .NET
 assemblies. The NativeAOT backend admits only structurally recognized Windows x64
-outputs and a small verified pass allowlist. Apphosts, ReadyToRun images,
+outputs and a small verified pass allowlist, including optional one-time startup
+code measurement and clean tamper response. Apphosts, ReadyToRun images,
 single-file bundles, mixed-mode assemblies, and already-protected inputs are
 identified and rejected with stage-specific guidance. Because binary transforms
 invalidate Authenticode, sign the protected output rather than the input binary.
@@ -76,12 +92,12 @@ The Windows x64 archive includes the .NET runtime. Extract the archive, then run
 To install the .NET tool with the .NET 8 SDK or newer:
 
 ```powershell
-dotnet tool install --global rampart --version 0.4.0
+dotnet tool install --global rampart --version 1.0.0
 rampart --version
 ```
 
 The `Rampart.Core` NuGet package provides the transformation engine for .NET 8
-applications. Add it with `dotnet add package Rampart.Core --version 0.4.0`.
+applications. Add it with `dotnet add package Rampart.Core --version 1.0.0`.
 `Rampart.MSBuild` provides disabled-by-default publish integration; reference it
 with `PrivateAssets="all"` at the same version as the tool.
 
@@ -95,6 +111,20 @@ dotnet build Rampart.slnx
 
 The core library builds cross-platform. Run and verify protected executables on
 the Windows versions supported by your application.
+
+### Desktop interface
+
+The Windows desktop interface provides drag-and-drop input, target-aware presets
+and setting controls, configuration load/save, output selection, and cancellable
+protection through a separate CLI worker process:
+
+```powershell
+dotnet run --project src/Rampart.Gui
+```
+
+Development builds locate a sibling CLI automatically. Packaged deployments must
+place `rampart.exe` or `rampart.dll` beside the interface, install `rampart.exe`
+on `PATH`, set `RAMPART_CLI_PATH`, or select the worker in the interface.
 
 ## Quick start
 
@@ -148,13 +178,72 @@ records applied, skipped, and rejected work per method. Unsupported methods stay
 unchanged with a reason. Keep `.rmap.json` files, PDBs, keep lists, and signing
 keys with private build artifacts rather than distributing them.
 
+When `ControlFlow` is enabled, common Boolean/int32 decisions first receive
+per-site seeded dispatch even in compiler-generated async methods whose exception
+regions prevent full CFG permutation. This raises the cost of a one-branch patch;
+it remains client-side hardening and is not an authorization boundary.
+
+For selected int32 VM methods whose decoded program should not remain cached in
+memory, combine `HardenedRuntime` with `EphemeralVmPrograms` and an explicit
+virtualization rule:
+
+```json
+{
+  "Seed": 12345,
+  "Targets": {
+    "Version": 1,
+    "Managed": {
+      "HardenedRuntime": true,
+      "EphemeralVmPrograms": true,
+      "RequireVirtualization": true,
+      "Rules": [
+        { "Type": "Example.LicenseChecks", "Method": "Validate", "Virtualize": true }
+      ]
+    }
+  }
+}
+```
+
+This mode authenticates and decrypts the program for every call, then clears the
+decoded characters and interpreter operand frame even when the protected method
+throws. It materially increases per-call allocation and cryptographic work, so
+reserve it for infrequent sensitive decisions. The program and its derived key
+necessarily exist during execution; this narrows useful snapshot windows rather
+than defeating an active observer inside the process. It does not make ordinary
+managed strings or application-owned buffers ephemeral.
+
+### NativeAOT startup integrity
+
+Post-link code measurement is deliberately opt-in because it scans admitted
+runtime-function code once before the original entry point. Pair the measurement
+with the clean response when a modified image should stop before application
+logic runs:
+
+```json
+{
+  "Preset": "off",
+  "Knobs": {
+    "integrity.measurement-channels": "Light",
+    "response.tool-response": "Light"
+  },
+  "Targets": {
+    "Version": 1,
+    "NativeAot": {}
+  }
+}
+```
+
+The expected measurement and verifier are necessarily present in the local
+process. This detects ordinary patching and increases analysis cost; it does not
+make local authorization or locally stored secrets trustworthy.
+
 ### Publish integration
 
 Add the package and enable it only for the publish configurations you have tested:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Rampart.MSBuild" Version="0.4.0" PrivateAssets="all" />
+  <PackageReference Include="Rampart.MSBuild" Version="1.0.0" PrivateAssets="all" />
 </ItemGroup>
 
 <PropertyGroup>

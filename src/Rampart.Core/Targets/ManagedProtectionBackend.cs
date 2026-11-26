@@ -23,6 +23,7 @@ public sealed class ManagedProtectionBackend : IProtectionBackend
         Add("rename", options.RenamePrivateMembers); Add("control-flow", options.ControlFlow);
         Add("virtualize", options.Virtualize); Add("watermark", options.Watermark is not null);
         if (options.HardenedRuntime) Add("hardened-runtime", true);
+        if (options.EphemeralVmPrograms) Add("ephemeral-vm-programs", true);
         return new(classification, Name, protections, []);
     }
 

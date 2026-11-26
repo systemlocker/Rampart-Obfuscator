@@ -20,11 +20,16 @@ internal static class ManagedHelperInjector
         var sourceMethods = source.Methods
             .Where(method => (method.Name == "Decode" && needDecode)
                 || (method.Name == "Verify" && needVerify)
-                || (method.Name == "Interpret" && needInterpret))
+                || (method.Name == "Interpret" && needInterpret)
+                || (method.Name == "ClearScratch" && hardened && needInterpret))
             .Select(method => hardened && method.Name == "Decode"
                 ? sourceModule.GetType(typeof(RuntimeHardenedTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Decode")
                 : framework && method.Name == "Verify"
-                    ? sourceModule.GetType(typeof(FrameworkIntegrityTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Verify") : method).ToArray();
+                    ? sourceModule.GetType(typeof(FrameworkIntegrityTemplate).FullName!).Methods.Single(candidate => candidate.Name == "Verify") : method)
+            .Concat(hardened && needInterpret
+                ? [sourceModule.GetType(typeof(RuntimeHardenedTemplate).FullName!).Methods.Single(candidate => candidate.Name == "DecodeProgram")]
+                : [])
+            .ToArray();
         var target = new TypeDefinition("", "<Rampart_" + suffix + ">", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed,
             module.TypeSystem.Object);
         module.Types.Add(target);

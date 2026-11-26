@@ -60,6 +60,16 @@ public sealed class NativeAotInvariantSnapshot
         { throw Error("The image contains malformed or unsupported PE metadata."); }
     }
 
+    internal static void ValidateTransformedImage(byte[] image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        try { _ = ValidateImage(image, allowRampartSections: true); }
+        catch (NativeAotCompatibilityException) { throw; }
+        catch (Exception exception) when (exception is BadImageFormatException or ArgumentException
+            or OverflowException or InvalidOperationException or NotSupportedException)
+        { throw Error("The transformed image contains malformed or unsupported PE metadata."); }
+    }
+
     public void ValidateUnchanged(byte[] candidate) => Validate(candidate, []);
 
     internal void Validate(byte[] candidate, IReadOnlyList<(int Offset, int Length)> allowed)
@@ -82,7 +92,7 @@ public sealed class NativeAotInvariantSnapshot
         _ = ValidateImage(candidate);
     }
 
-    internal static PeImage ValidateImage(byte[] image)
+    internal static PeImage ValidateImage(byte[] image, bool allowRampartSections = false)
     {
         if (image.Length < 256 || BinaryPrimitives.ReadInt32LittleEndian(image.AsSpan(0x3c)) < 64)
             throw Error("The image header is truncated.");
@@ -95,7 +105,20 @@ public sealed class NativeAotInvariantSnapshot
             || pe.Directory(DataDir.BoundImport).Size > 65536)
             throw Error("An import directory exceeds the descriptor limit.");
         ValidateBoundImportNames(pe);
-        PeCompatibility.Validate(pe);
+        if (allowRampartSections)
+        {
+            if (pe.Machine != MachineType.Amd64 || !pe.IsPe32Plus || (pe.Characteristics & 0x2000) != 0
+                || !pe.Directory(DataDir.ComDescriptor).IsEmpty)
+                throw Error("The transformed image is not a native PE32+ x64 executable.");
+            _ = PeCompatibility.Inspect(pe);
+            if (pe.EntryPointRva == 0 || pe.SectionFromRva(pe.EntryPointRva) is not { IsExecutable: true } entrySection
+                || pe.EntryPointRva - entrySection.VirtualAddress >= entrySection.SizeOfRawData)
+                throw Error("The transformed entry point is not backed by executable data.");
+        }
+        else
+        {
+            PeCompatibility.Validate(pe);
+        }
         var raw = pe.Sections.Where(section => section.SizeOfRawData > 0).OrderBy(section => section.PointerToRawData).ToArray();
         ulong end = pe.SizeOfHeaders;
         foreach (var section in raw)

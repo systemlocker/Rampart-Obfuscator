@@ -16,6 +16,17 @@
   <ItemGroup>
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
     <PackageReference Include="Microsoft.ILVerification" Version="10.0.6" />
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shipped manifest is the 1.x compatibility contract. Intentional
+         additions start in Unshipped; removals and signature changes fail builds. -->
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
   </ItemGroup>
 
 </Project>

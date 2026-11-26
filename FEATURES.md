@@ -112,9 +112,10 @@ are rejected for managed inputs.
 | --- | --- | --- |
 | `Strings` | Eligible method bodies | Replaces eligible string loads with a generated decoder and protected payload while preserving metadata-owned resource, interop, and serialization uses. |
 | `Constants` | Eligible method bodies | Rewrites verified integer constants while preserving stack behavior and exception semantics. |
-| `ControlFlow` | Eligible methods | Rebuilds a bounded, typed int32 subset; unsupported bodies remain unchanged with a reason. |
+| `ControlFlow` | Eligible methods | Replaces common Boolean/int32 decision branches with per-site seeded dispatch, including in exception-heavy generated methods, then permutes the broader bounded subset where stack and exception contracts permit. |
 | `Virtualize` | Explicitly selected methods | Converts a verified int32 method subset to a per-build interpreter. Selection is required and performance-sensitive methods should be measured. |
 | `HardenedRuntime` | Explicitly selected modern .NET methods | Uses authenticated encrypted payloads and method-specific dispatch. Embedded application-side keys do not provide confidentiality from the running application. |
+| `EphemeralVmPrograms` | Explicitly selected hardened VM methods | Decrypts each VM program for one invocation and clears the decoded program plus thread-local operand frame in a `finally` block. This reduces plaintext residency at substantial per-call cost; it does not resist code already executing in the process. |
 | `MetadataHygiene` | Assembly metadata | Removes supported build and symbol clues without changing the public API. |
 | `Integrity` | Protector-owned payloads | Detects changes to Rampart-owned managed payloads; it is not whole-process integrity. |
 | `RenamePrivateMembers` | Conservatively proven private/internal identities | Renames only identities whose reflection, serialization, interop, friend, and resource contracts can be preserved. |
@@ -136,15 +137,20 @@ scope, hashes, and per-method evidence.
 ## NativeAOT protection
 
 Rampart recognizes eligible Windows x64 NativeAOT outputs by structure rather
-than filename. The post-link backend intentionally allows only Light
-`packaging.header-disguise` (COFF timestamp and linker version) and Light
-`packaging.symbol-scrub` (DOS-stub content and section names; debug records,
-PDB paths, and COFF tables remain intact). It snapshots runtime-owned PE,
-unwind, relocation, load-configuration, debug, and symbol data; each pass is
-transactional and the output is rejected if an invariant changes.
+than filename. The post-link backend allows Light `packaging.header-disguise`
+(COFF timestamp and linker version), Light `packaging.symbol-scrub` (DOS-stub
+content and section names; debug records, PDB paths, and COFF tables remain
+intact), and opt-in Light `integrity.measurement-channels` with
+`response.tool-response`. The integrity adaptation adds a one-time startup scan
+over relocation-stable runtime-function code and can stop the process cleanly
+when a measured code byte changes. It is off by default because startup work
+grows with the amount of measured code. Original NativeAOT section layout and
+content remain byte-exact except for conservatively extended Guard CF loader
+metadata; protector code/data live in two new non-WX sections and every
+transformation is validated transactionally.
 
-NativeAOT method-body rewriting, runtime hooks, packing, managed options, and
-native presets under strict compatibility are rejected after native compilation
+NativeAOT method-body rewriting, recurring monitors, packing, managed options,
+and native presets under strict compatibility are rejected after native compilation
 (use `"Preset": "off"` with explicit Light selections when combining
 `Compatibility: "Strict"` with NativeAOT). Apply managed IL protection before
 NativeAOT compilation, then use the post-link allowlist, and finally apply

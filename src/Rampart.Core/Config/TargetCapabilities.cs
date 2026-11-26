@@ -9,7 +9,8 @@ public static class TargetCapabilities
     public static ProtectionLevel MaximumLevel(string id, ProtectionTargetKind target) => target switch
     {
         ProtectionTargetKind.NativePe => ProtectionCapabilities.MaxReadyLevel(id),
-        ProtectionTargetKind.NativeAot when id is "packaging.header-disguise" or "packaging.symbol-scrub" => ProtectionLevel.Light,
+        ProtectionTargetKind.NativeAot when id is "packaging.header-disguise" or "packaging.symbol-scrub"
+            or "integrity.measurement-channels" or "response.tool-response" => ProtectionLevel.Light,
         ProtectionTargetKind.ManagedIl when id is "strings.encryption" or "code-transformation.mba-constants"
             or "code-transformation.flattening" or "packaging.symbol-scrub"
             or "virtualization.per-build-isa" or "virtualization.coverage" => ProtectionLevel.Light,
@@ -32,6 +33,7 @@ public static class TargetCapabilities
             managed.ControlFlow = false;
             managed.Virtualize = false;
             managed.HardenedRuntime = false;
+            managed.EphemeralVmPrograms = false;
             managed.RequireVirtualization = false;
             managed.RemoveWatermark = false;
         }

@@ -8,7 +8,9 @@ using Rampart.Targets;
 namespace Rampart.NativeAot;
 
 /// <summary>Post-publish image-only protection with a separate NativeAOT plan and
-/// byte-ownership boundary. Native runtime transforms never enter this pipeline.</summary>
+/// byte-ownership boundary. Runtime extension is limited to the explicit startup
+/// integrity adaptation; original NativeAOT code and runtime data stay immutable
+/// except for conservatively extended loader metadata.</summary>
 public sealed class NativeAotBackend
 {
     /// <summary>Independently checks a finished result against its original image;
@@ -23,6 +25,11 @@ public sealed class NativeAotBackend
         if (original.AsSpan().SequenceEqual(output)) { snapshot.ValidateUnchanged(output); return; }
         if (!NativeAotMarker.TryInspect(output, out bool markerValid) || !markerValid)
             throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "The transformed image has no valid completion marker.");
+        if (output.Length != original.Length)
+        {
+            ValidateRuntimeExtension(original, output);
+            return;
+        }
         var allowed = new List<(int Offset, int Length)>
         {
             (2, 58), (64, snapshot.PeOffset - 64), (snapshot.PeOffset + 8, 4),
@@ -76,10 +83,16 @@ public sealed class NativeAotBackend
 
         byte[] current = (byte[])input.Clone();
         var invariants = new List<NativeAotInvariantEvidence>();
+        int[] runtimeIndexes = plan.Select((pass, index) => (pass, index))
+            .Where(item => item.pass.Effective != ProtectionLevel.Off
+                && item.pass.Knob is "integrity.measurement-channels" or "response.tool-response")
+            .Select(item => item.index).ToArray();
         for (int index = 0; index < plan.Count; index++)
         {
             var pass = plan[index];
             if (pass.Effective == ProtectionLevel.Off) continue;
+            if (pass.Knob is "integrity.measurement-channels" or "response.tool-response")
+                continue; // Both settings share one isolated runtime-extension transaction below.
             // Each pass works on an isolated copy. Only after both the byte ownership
             // and PE structural checks pass does it become the next pipeline input.
             var before = NativeAotInvariantSnapshot.Capture(current);
@@ -123,20 +136,38 @@ public sealed class NativeAotBackend
                 ChangedBytes = changed
             };
         }
+        if (runtimeIndexes.Length != 0)
+        {
+            bool measurement = runtimeIndexes.Any(index => plan[index].Knob == "integrity.measurement-channels");
+            bool response = runtimeIndexes.Any(index => plan[index].Knob == "response.tool-response");
+            byte[] candidate = ApplyRuntimeIntegrity(current, settings.Seed, measurement, response);
+            ValidateRuntimeExtension(current, candidate);
+            int changed = CountChanged(current, candidate);
+            invariants.Add(new("nativeaot-runtime-integrity", true,
+                NativeAotInvariantSnapshot.Hash(current), NativeAotInvariantSnapshot.Hash(candidate)));
+            current = candidate;
+            foreach (int index in runtimeIndexes)
+                plan[index] = plan[index] with { Status = NativeAotEvidenceStatus.Applied, ChangedBytes = changed };
+        }
         // A no-op must remain byte-exact, including its original checksum. For a
         // changed image compute the final PE checksum without touching certificates.
         if (!input.AsSpan().SequenceEqual(current))
         {
-            var before = NativeAotInvariantSnapshot.Capture(current);
             byte[] candidate = (byte[])current.Clone();
             NativeAotMarker.Write(candidate);
-            before.Validate(candidate, [(NativeAotMarker.Offset, NativeAotMarker.Length)]);
+            if (runtimeIndexes.Length == 0)
+                NativeAotInvariantSnapshot.Capture(current).Validate(candidate, [(NativeAotMarker.Offset, NativeAotMarker.Length)]);
+            else
+                ValidateRuntimeExtension(input, candidate);
             invariants.Add(new("transformation-marker", true, NativeAotInvariantSnapshot.Hash(current), NativeAotInvariantSnapshot.Hash(candidate)));
             current = candidate;
-            before = NativeAotInvariantSnapshot.Capture(current);
             candidate = (byte[])current.Clone();
-            BinaryPrimitives.WriteUInt32LittleEndian(candidate.AsSpan(before.OptionalOffset + 64), PeChecksum.Compute(candidate));
-            before.Validate(candidate, [(before.OptionalOffset + 64, 4)]);
+            int optionalOffset = BinaryPrimitives.ReadInt32LittleEndian(candidate.AsSpan(0x3c)) + 24;
+            BinaryPrimitives.WriteUInt32LittleEndian(candidate.AsSpan(optionalOffset + 64), PeChecksum.Compute(candidate));
+            if (runtimeIndexes.Length == 0)
+                NativeAotInvariantSnapshot.Capture(current).Validate(candidate, [(optionalOffset + 64, 4)]);
+            else
+                ValidateRuntimeExtension(input, candidate);
             invariants.Add(new("pe-checksum", true, NativeAotInvariantSnapshot.Hash(current), NativeAotInvariantSnapshot.Hash(candidate)));
             current = candidate;
         }
@@ -146,8 +177,114 @@ public sealed class NativeAotBackend
 
     private static int CountChanged(byte[] left, byte[] right)
     {
-        int count = 0;
-        for (int index = 0; index < left.Length; index++) if (left[index] != right[index]) count++;
+        int count = Math.Abs(left.Length - right.Length);
+        for (int index = 0; index < Math.Min(left.Length, right.Length); index++)
+            if (left[index] != right[index]) count++;
         return count;
+    }
+
+    private static byte[] ApplyRuntimeIntegrity(byte[] input, long seed, bool measurement, bool response)
+    {
+        var catalog = KnobCatalog.Load();
+        var isolated = new ProtectionSettings { Preset = Presets.Light, Seed = seed };
+        foreach (KnobDef knob in catalog.All)
+            isolated.Knobs[knob.Id] = ProtectionLevel.Off;
+        isolated.Knobs["packaging.ep-confusion"] = ProtectionLevel.Light;
+        if (measurement) isolated.Knobs["integrity.measurement-channels"] = ProtectionLevel.Light;
+        if (response) isolated.Knobs["response.tool-response"] = ProtectionLevel.Light;
+        ProtectionCapabilities.Validate(isolated, catalog);
+
+        var context = new BuildContext(PeImage.Load(input), isolated, catalog);
+        context.Analyze();
+        var runtime = new RuntimeHardeningPass();
+        runtime.RunBeforeEntryPoint(context);
+        new EntryPointPass().Run(context);
+        // EntryPointPass owns a one-shot dispatcher. Do not install the recurring
+        // per-thread monitor: whole-image measurement is intentionally startup-only.
+        RelocBuilder.Rebuild(context);
+        return context.Pe.ToBytes();
+    }
+
+    private static void ValidateRuntimeExtension(byte[] original, byte[] output)
+    {
+        NativeAotInvariantSnapshot.ValidateTransformedImage(output);
+        PeImage before = PeImage.Load(original);
+        PeImage after = PeImage.Load(output);
+        DataDirectory loadConfig = before.Directory(DataDir.LoadConfig);
+        bool guardCf = PeCompatibility.Inspect(before).GuardCf;
+        if (after.Sections.Count != before.Sections.Count + 2)
+            throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "Runtime integrity must add exactly two protector-owned sections.");
+
+        foreach (PeImage.Section originalSection in before.Sections)
+        {
+            PeImage.Section? emitted = after.Sections.SingleOrDefault(section => section.VirtualAddress == originalSection.VirtualAddress);
+            byte[] normalized = emitted?.Data.ToArray() ?? [];
+            if (guardCf && emitted is not null && before.SectionFromRva(loadConfig.RelativeVirtualAddress)?.VirtualAddress == originalSection.VirtualAddress)
+            {
+                int loadConfigOffset = checked((int)(loadConfig.RelativeVirtualAddress - originalSection.VirtualAddress));
+                originalSection.Data.AsSpan(loadConfigOffset + 0x80, 20).CopyTo(normalized.AsSpan(loadConfigOffset + 0x80));
+            }
+            if (emitted is null || emitted.VirtualSize != originalSection.VirtualSize
+                || emitted.SizeOfRawData != originalSection.SizeOfRawData
+                || emitted.Characteristics != originalSection.Characteristics
+                || !normalized.AsSpan().SequenceEqual(originalSection.Data))
+            {
+                string reason = emitted is null ? "missing"
+                    : emitted.VirtualSize != originalSection.VirtualSize ? "virtual-size"
+                    : emitted.SizeOfRawData != originalSection.SizeOfRawData ? "raw-size"
+                    : emitted.Characteristics != originalSection.Characteristics ? "characteristics"
+                    : "content";
+                throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED",
+                    $"Runtime integrity modified original NativeAOT section RVA {originalSection.VirtualAddress:X8} ({reason}).");
+            }
+        }
+        if (guardCf)
+            ValidateGuardCfExtension(before, after, loadConfig.RelativeVirtualAddress);
+        RelocEntry[] emittedRelocations = Relocations.Enumerate(after).ToArray();
+        if (Relocations.Enumerate(before).Any(entry => !emittedRelocations.Contains(entry)))
+            throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "Runtime integrity did not preserve an original relocation entry.");
+
+        PeImage.Section[] added = after.Sections
+            .Where(section => before.Sections.All(originalSection => originalSection.VirtualAddress != section.VirtualAddress))
+            .ToArray();
+        PeImage.Section? code = added.SingleOrDefault(section => section.Name == ".rmpt");
+        PeImage.Section? data = added.SingleOrDefault(section => section.Name == ".rmpd");
+        if (code is null || data is null || !code.IsExecutable
+            || code.Characteristics.HasFlag(SectionCharacteristics.MemWrite)
+            || !data.Characteristics.HasFlag(SectionCharacteristics.MemWrite) || data.IsExecutable
+            || after.EntryPointRva == before.EntryPointRva || after.SectionFromRva(after.EntryPointRva) != code)
+        {
+            throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "Runtime integrity emitted an invalid section or entry-point layout.");
+        }
+
+        int overlayOffset = checked((int)Math.Max((ulong)before.SizeOfHeaders,
+            before.Sections.Max(section => (ulong)section.PointerToRawData + section.SizeOfRawData)));
+        ReadOnlySpan<byte> overlay = original.AsSpan(overlayOffset);
+        if (overlay.Length > output.Length || !output.AsSpan(output.Length - overlay.Length).SequenceEqual(overlay))
+            throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "Runtime integrity did not preserve the original overlay.");
+    }
+
+    private static void ValidateGuardCfExtension(PeImage before, PeImage after, uint loadConfigRva)
+    {
+        ulong oldTableVa = BinaryPrimitives.ReadUInt64LittleEndian(before.ReadRva(loadConfigRva + 0x80, 8));
+        ulong oldCount = BinaryPrimitives.ReadUInt64LittleEndian(before.ReadRva(loadConfigRva + 0x88, 8));
+        uint oldFlags = BinaryPrimitives.ReadUInt32LittleEndian(before.ReadRva(loadConfigRva + 0x90, 4));
+        ulong newTableVa = BinaryPrimitives.ReadUInt64LittleEndian(after.ReadRva(loadConfigRva + 0x80, 8));
+        ulong newCount = BinaryPrimitives.ReadUInt64LittleEndian(after.ReadRva(loadConfigRva + 0x88, 8));
+        uint newFlags = BinaryPrimitives.ReadUInt32LittleEndian(after.ReadRva(loadConfigRva + 0x90, 4));
+        int stride = checked(4 + (int)((oldFlags & 0xF0000000u) >> 28));
+        if (newCount != oldCount + 1 || (newFlags & oldFlags) != oldFlags || newTableVa == 0)
+            throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "Runtime integrity did not extend Guard CF metadata conservatively.");
+        byte[] oldTable = oldCount == 0 ? [] : before.ReadRva(before.VaToRva(oldTableVa), checked((int)oldCount * stride));
+        byte[] newTable = after.ReadRva(after.VaToRva(newTableVa), checked((int)newCount * stride));
+        for (int index = 0; index < oldTable.Length; index += stride)
+        {
+            ReadOnlySpan<byte> entry = oldTable.AsSpan(index, stride);
+            bool found = false;
+            for (int candidate = 0; candidate < newTable.Length; candidate += stride)
+                if (newTable.AsSpan(candidate, stride).SequenceEqual(entry)) { found = true; break; }
+            if (!found)
+                throw new NativeAotCompatibilityException("NAOT_INVARIANT_FAILED", "Runtime integrity dropped an original Guard CF target.");
+        }
     }
 }
