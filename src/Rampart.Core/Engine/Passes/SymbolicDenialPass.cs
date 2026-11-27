@@ -32,7 +32,9 @@ public sealed class SymbolicDenialPass
 
         for (int index = 0; index < LightGadgetCount; index++)
         {
-            byte[] gadget = BuildGadget(ctx.Rng);
+            byte[] gadget = ctx.Pe.Machine == MachineType.I386
+                ? BuildX86Gadget(ctx.Rng)
+                : BuildGadget(ctx.Rng);
             if (gadget.Length != GadgetSize)
                 throw new InvalidOperationException($"Symbolic gadget assembled to {gadget.Length} bytes, expected {GadgetSize}.");
             gadget.CopyTo(section.Data, index * GadgetSize);
@@ -74,5 +76,35 @@ public sealed class SymbolicDenialPass
         a.Ret();
         a.Align(GadgetSize);
         return a.Assemble();
+    }
+
+    private static byte[] BuildX86Gadget(Random rng)
+    {
+        uint xorMask = unchecked((uint)rng.NextInt64(1, 1L << 32));
+        uint multiplier = unchecked((uint)rng.NextInt64(3, 1L << 32)) | 1;
+        uint addend = unchecked((uint)rng.NextInt64(1, 1L << 32));
+        var code = new List<byte>(GadgetSize);
+
+        void Dword(uint value)
+        {
+            code.Add((byte)value); code.Add((byte)(value >> 8));
+            code.Add((byte)(value >> 16)); code.Add((byte)(value >> 24));
+        }
+
+        code.Add(0x53);                                      // push ebx
+        code.AddRange([0x8B, 0x5C, 0x24, 0x08]);             // mov ebx,[esp+8]
+        code.AddRange([0x81, 0xF3]); Dword(xorMask);          // xor ebx,imm32
+        code.AddRange([0x69, 0xDB]); Dword(multiplier);       // imul ebx,ebx,imm32
+        code.AddRange([0x81, 0xC3]); Dword(addend);           // add ebx,imm32
+        code.AddRange([0x8B, 0xC3, 0xC1, 0xE8, 0x11]);       // mov eax,ebx; shr eax,17
+        code.AddRange([0x31, 0xC3, 0xF6, 0xC3, 0x01]);       // xor ebx,eax; test bl,1
+        code.AddRange([0x74, 0x07]);                         // jz even
+        code.AddRange([0x8B, 0xC3, 0xC1, 0xC0, 0x0D]);       // mov eax,ebx; rol eax,13
+        code.AddRange([0xEB, 0x07]);                         // jmp done
+        code.AddRange([0x8B, 0xC3, 0xC1, 0xE8, 0x07]);       // even: mov eax,ebx; shr eax,7
+        code.AddRange([0x31, 0xD8]);                         // xor eax,ebx
+        code.AddRange([0x5B, 0xC3]);                         // done: pop ebx; ret
+        while (code.Count < GadgetSize) code.Add(0x90);
+        return code.ToArray();
     }
 }

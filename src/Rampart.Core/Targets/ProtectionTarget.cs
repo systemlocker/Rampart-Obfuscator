@@ -4,7 +4,8 @@ namespace Rampart.Targets;
 public enum ProtectionTargetKind
 {
     NativePe, NativeAot, ManagedIl, ReadyToRun, FrameworkDependentAppHost,
-    SelfContainedAppHost, SingleFileBundle, MixedMode, AlreadyProtected, Unknown
+    SelfContainedAppHost, SingleFileBundle, MixedMode, AlreadyProtected, Unknown,
+    NativePeX86
 }
 
 public enum TargetDisposition { Supported, Inspect, Unsupported, Ambiguous }

@@ -19,11 +19,29 @@ public static class PeCompatibility
                 $"magic 0x{pe.OptionalMagic:X}).");
         }
 
+        ValidateExecutable(pe, "native x64");
+    }
+
+    /// <summary>Admission contract for the PE32/I386 backend.</summary>
+    public static void ValidateX86(PeImage pe)
+    {
+        if (pe.Machine != MachineType.I386 || pe.IsPe32Plus || pe.OptionalMagic != PeImage.MagicPe32)
+        {
+            throw new NotSupportedException(
+                $"Rampart's x86 backend protects PE32 I386 images only (input is {pe.Machine}, " +
+                $"magic 0x{pe.OptionalMagic:X}).");
+        }
+
+        ValidateExecutable(pe, "native x86");
+    }
+
+    private static void ValidateExecutable(PeImage pe, string backend)
+    {
         if ((pe.Characteristics & ImageFileDll) != 0)
             throw new NotSupportedException("Rampart protects executable images, not DLLs.");
 
         if (!pe.Directory(DataDir.ComDescriptor).IsEmpty)
-            throw new NotSupportedException("Managed .NET images are not supported by the native x64 pipeline.");
+            throw new NotSupportedException($"Managed .NET images are not supported by the {backend} pipeline.");
 
         _ = Inspect(pe);
 
@@ -67,11 +85,13 @@ public static class PeCompatibility
                 throw new BadImageFormatException(
                     $"Load-config size {loadConfigSize} is outside its section backing ({sectionAvail} bytes).");
             }
-            // IMAGE_LOAD_CONFIG_DIRECTORY64::GuardFlags is at offset 0x90.
-            if (loadConfigSize >= 0x94)
+            // GuardFlags follows pointer-sized fields, so PE32 and PE32+ use
+            // different offsets in IMAGE_LOAD_CONFIG_DIRECTORY.
+            uint guardFlagsOffset = pe.IsPe32Plus ? 0x90u : 0x58u;
+            if (loadConfigSize >= guardFlagsOffset + 4)
             {
                 guardFlags = (ImageGuardFlags)BinaryPrimitives.ReadUInt32LittleEndian(
-                    pe.ReadRva(checked(loadConfig.RelativeVirtualAddress + 0x90), 4));
+                    pe.ReadRva(checked(loadConfig.RelativeVirtualAddress + guardFlagsOffset), 4));
             }
         }
 
@@ -151,15 +171,21 @@ public static class PeCompatibility
         DataDirectory directory = pe.Directory(DataDir.Tls);
         if (directory.IsEmpty)
             return 0;
-        EnsureReadable(pe, directory, 40, "TLS");
-        ulong callbacksVa = BinaryPrimitives.ReadUInt64LittleEndian(
-            pe.ReadRva(directory.RelativeVirtualAddress + 24, 8));
+        uint pointerSize = pe.IsPe32Plus ? 8u : 4u;
+        uint callbackOffset = pe.IsPe32Plus ? 24u : 12u;
+        uint tlsSize = pe.IsPe32Plus ? 40u : 24u;
+        EnsureReadable(pe, directory, tlsSize, "TLS");
+        ulong callbacksVa = pe.IsPe32Plus
+            ? BinaryPrimitives.ReadUInt64LittleEndian(pe.ReadRva(directory.RelativeVirtualAddress + callbackOffset, 8))
+            : BinaryPrimitives.ReadUInt32LittleEndian(pe.ReadRva(directory.RelativeVirtualAddress + callbackOffset, 4));
         if (callbacksVa == 0)
             return 0;
         uint callbacksRva = pe.VaToRva(callbacksVa);
         for (int i = 0; i < 4096; i++)
         {
-            if (pe.ReadU64(callbacksRva + (uint)(i * 8)) == 0)
+            uint slotRva = checked(callbacksRva + (uint)i * pointerSize);
+            bool terminator = pe.IsPe32Plus ? pe.ReadU64(slotRva) == 0 : pe.ReadU32(slotRva) == 0;
+            if (terminator)
                 return i;
         }
         throw new BadImageFormatException("TLS callback array is not terminated within 4096 entries.");

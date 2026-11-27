@@ -1,15 +1,15 @@
 # Protection coverage
 
 This guide describes Rampart's supported protections, target-specific limits,
-and compatibility requirements for native Windows x64 executables, pure managed
-IL assemblies, and eligible Windows x64 NativeAOT outputs.
+and compatibility requirements for native Windows x64 and x86 executables, pure
+managed IL assemblies, and eligible Windows x64 NativeAOT outputs.
 
 Presets and bulk group changes are limited to supported levels. An explicit
 request for an unsupported level fails validation. A supported setting may still
 skip an input region that does not meet its requirements; review the build log
 and applied-protection report for each output.
 
-## Native PE protection
+## Native x64 PE protection
 
 | What is protected | Protection | Verified through | What changes |
 | --- | --- | --- | --- |
@@ -101,6 +101,29 @@ each runtime measure.
 These protections target PE32+ AMD64 executables. Native DLLs and
 already-protected inputs are rejected by this backend. Authenticode signatures do
 not survive a binary rewrite, so the protected output must be signed afterward.
+
+## Native x86 PE protection
+
+The native x86 backend accepts PE32 I386 executables and has a separate capability
+ceiling. Presets are supported, but resolve only to the implemented x86 settings;
+an explicit request for an x64-only setting fails validation. The backend does not
+reuse x64 calling conventions, pointer widths, TLS records, unwind metadata, or
+runtime stubs.
+
+| What is protected | Protection | Verified through | What changes |
+| --- | --- | --- | --- |
+| Build provenance and symbol clues | `packaging.symbol-scrub` | Maximum | Applies the same bounded debug, Rich-header, section-name, timestamp, and validated COFF cleanup as the x64 backend. |
+| PE build identity | `packaging.header-disguise` | Maximum | Rewrites compatible build identity fields and computes the final PE checksum at Maximum. |
+| Original entry path | `packaging.ep-confusion` | Light | Moves the entry to a PE32 stub that saves all Win32 general-purpose registers and flags, crosses a cold overlapping-decode field, restores the exact entry state, and transfers directly to the original entry point. |
+| Static cross-reference discovery | `analysis.ida-bomb` | Light | Adds bounded cold Win32 functions connected by valid relative-call cross-references. |
+| High-level decompilation | `analysis.hexrays-denial` | Light | Adds position-independent x86 opaque control flow and internally consistent relative jump-table decoys. |
+| Symbolic execution | `analysis.symbolic-denial` | Light | Adds bounded 32-bit nonlinear arithmetic gadgets with a balanced Win32 stack and preserved nonvolatile state. |
+| Linear disassembly | `analysis.static-decode-denial` | Light | Adds bounded x86 overlapping-decode gadgets outside the application execution path. |
+
+Native x86 currently exposes image-level transforms only. Function rewriting,
+string encryption, packing, import concealment, runtime integrity and response,
+NativeAOT, managed x86, and native DLLs remain outside this backend. Protected
+x86 output retains the PE32/I386 contract and must be signed after transformation.
 
 ## Managed IL protection
 

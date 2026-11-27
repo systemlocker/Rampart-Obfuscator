@@ -43,9 +43,10 @@ internal sealed class SettingsArguments
                 _target = RequireValue(args, ref index, arg).ToLowerInvariant() switch
                 {
                     "native" or "native-pe" => ProtectionTargetKind.NativePe,
+                    "x86" or "native-x86" or "native-pe-x86" => ProtectionTargetKind.NativePeX86,
                     "nativeaot" => ProtectionTargetKind.NativeAot,
                     "managed" or "managed-il" => ProtectionTargetKind.ManagedIl,
-                    _ => throw new ArgumentException("RP_TARGET_OPTION: Expected native, nativeaot, or managed."),
+                    _ => throw new ArgumentException("RP_TARGET_OPTION: Expected native, x86, nativeaot, or managed."),
                 };
                 return true;
             case "--compatibility":
@@ -192,7 +193,8 @@ internal sealed class SettingsArguments
     {
         if (settings.Targets?.Managed is not null && settings.Targets?.NativeAot is not null)
             throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: Managed and NativeAOT target options cannot be combined.");
-        if (target == ProtectionTargetKind.NativePe && (settings.Targets?.Managed is not null || settings.Targets?.NativeAot is not null))
+        if (target is ProtectionTargetKind.NativePe or ProtectionTargetKind.NativePeX86
+            && (settings.Targets?.Managed is not null || settings.Targets?.NativeAot is not null))
             throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: Managed or NativeAOT options conflict with the native PE target.");
         if (target == ProtectionTargetKind.ManagedIl && settings.Targets?.NativeAot is not null)
             throw new NotSupportedException("RP_TARGET_OPTIONS_MISMATCH: NativeAOT options conflict with the managed IL target.");

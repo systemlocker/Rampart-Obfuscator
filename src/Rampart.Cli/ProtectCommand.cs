@@ -225,6 +225,10 @@ internal static class ProtectCommand
     {
         int budget = plan.Classification.Target.Kind == ProtectionTargetKind.NativePe
             ? KnobCatalog.BudgetFor(settings, catalog)
+            : plan.Classification.Target.Kind == ProtectionTargetKind.NativePeX86
+                ? plan.Protections.Sum(protection =>
+                    Enum.TryParse(protection.Effective, out ProtectionLevel level)
+                        ? catalog.Get(protection.Id).PointsAt(level) : 0)
             : 0;
         var preview = new
         {
@@ -303,7 +307,7 @@ internal static class ProtectCommand
 
           -o, --out <file>          output path (default: <name>.protected.<ext>)
               --config <file>       load settings JSON
-              --target <kind>       assert native, nativeaot, or managed input
+              --target <kind>       assert native, x86, nativeaot, or managed input
               --compatibility <p>   preserve, warn, or strict compatibility policy
               --preset <name>       light, balanced, heavy, maximum, or nuclear
               --seed <number>       reproducible signed 64-bit build seed

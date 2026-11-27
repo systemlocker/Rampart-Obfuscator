@@ -12,8 +12,8 @@
     <PackageId>rampart</PackageId>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>rampart</ToolCommandName>
-    <Description>Command-line interface for protecting and inspecting Windows x64 PE files with Rampart.</Description>
-    <PackageTags>cli;pe;obfuscation;protection;windows;x64</PackageTags>
+    <Description>Command-line interface for protecting and inspecting Windows x64 and x86 PE files with Rampart.</Description>
+    <PackageTags>cli;pe;obfuscation;protection;windows;x64;x86</PackageTags>
     <RollForward>LatestMajor</RollForward>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>

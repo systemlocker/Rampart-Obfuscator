@@ -45,6 +45,12 @@ public sealed class HexRaysDenialPass
     {
         Span<byte> body = section.Data.AsSpan(index * FunctionSize, FunctionSize);
 
+        if (ctx.Pe.Machine == MachineType.I386)
+        {
+            EmitX86Function(ctx, body);
+            return;
+        }
+
         // Conventional entry and a RIP-relative address of the table below.
         body[0] = 0x55;                         // push rbp
         body[1] = 0x48; body[2] = 0x89; body[3] = 0xE5; // mov rbp,rsp
@@ -84,6 +90,42 @@ public sealed class HexRaysDenialPass
             BinaryPrimitives.WriteInt32LittleEndian(
                 body[(TableOffset + slot * 4)..],
                 target - TableOffset);
+        }
+    }
+
+    private static void EmitX86Function(BuildContext ctx, Span<byte> body)
+    {
+        body[0] = 0x55;                         // push ebp
+        body[1] = 0x8B; body[2] = 0xEC;         // mov ebp,esp
+        body[3] = 0xE8;                         // call next; pop obtains EIP
+        BinaryPrimitives.WriteInt32LittleEndian(body[4..], 0);
+        body[8] = 0x5A;                         // pop edx
+        body[9] = 0x83; body[10] = 0xC2;
+        body[11] = TableOffset - 8;             // add edx,table-next
+
+        uint opaque = unchecked((uint)ctx.Rng.NextInt64(1, 1L << 32));
+        body[12] = 0xB8;
+        BinaryPrimitives.WriteUInt32LittleEndian(body[13..], opaque);
+        body[17] = 0x35;
+        BinaryPrimitives.WriteUInt32LittleEndian(body[18..], opaque);
+        body[22] = 0x85; body[23] = 0xC0;       // test eax,eax
+        body[24] = 0x75; body[25] = DispatcherOffset - 26;
+        body[26] = 0x5D; body[27] = 0xC3;       // pop ebp; ret
+
+        // mov eax,[edx+eax*4]; add eax,edx; jmp eax
+        body[DispatcherOffset + 0] = 0x8B;
+        body[DispatcherOffset + 1] = 0x04;
+        body[DispatcherOffset + 2] = 0x82;
+        body[DispatcherOffset + 3] = 0x03;
+        body[DispatcherOffset + 4] = 0xC2;
+        body[DispatcherOffset + 5] = 0xFF;
+        body[DispatcherOffset + 6] = 0xE0;
+
+        for (int slot = 0; slot < 4; slot++)
+        {
+            int target = slot % 2 == 0 ? 26 : DispatcherOffset;
+            BinaryPrimitives.WriteInt32LittleEndian(
+                body[(TableOffset + slot * 4)..], target - TableOffset);
         }
     }
 }

@@ -44,6 +44,12 @@ public sealed class IdaBombPass
         int offset = index * FunctionSize;
         Span<byte> body = section.Data.AsSpan(offset, FunctionSize);
 
+        if (ctx.Pe.Machine == MachineType.I386)
+        {
+            EmitX86Function(ctx, body, index, offset);
+            return;
+        }
+
         // push rbp; mov rbp,rsp; sub rsp,0x20 (Windows x64 shadow space)
         body[0] = 0x55;
         body[1] = 0x48;
@@ -81,6 +87,33 @@ public sealed class IdaBombPass
         body[30] = 0x20;
         body[31] = 0x5D; // pop rbp
         body[32] = 0xC3; // ret
+    }
+
+    private static void EmitX86Function(BuildContext ctx, Span<byte> body, int index, int offset)
+    {
+        // A conventional Win32 frame followed by the same bounded opaque call
+        // shape as the x64 decoy. The normal path restores ESP and EBP exactly.
+        body[0] = 0x55;                         // push ebp
+        body[1] = 0x8B; body[2] = 0xEC;         // mov ebp,esp
+        body[3] = 0x83; body[4] = 0xEC; body[5] = 0x20; // sub esp,0x20
+        uint opaque = NextNonZeroUInt32(ctx.Rng);
+        body[6] = 0xB8;                         // mov eax,opaque
+        BinaryPrimitives.WriteUInt32LittleEndian(body[7..], opaque);
+        body[11] = 0x35;                        // xor eax,opaque
+        BinaryPrimitives.WriteUInt32LittleEndian(body[12..], opaque);
+        body[16] = 0x85; body[17] = 0xC0;       // test eax,eax
+        body[18] = 0x74; body[19] = 0x05;       // jz epilogue
+        body[20] = 0xE8;                        // cold rel32 call
+
+        int targetIndex = (index * 73 + 19) % LightFunctionCount;
+        if (targetIndex == index)
+            targetIndex = (targetIndex + 1) % LightFunctionCount;
+        int targetOffset = targetIndex * FunctionSize;
+        BinaryPrimitives.WriteInt32LittleEndian(body[21..], targetOffset - (offset + 25));
+
+        body[25] = 0x83; body[26] = 0xC4; body[27] = 0x20; // add esp,0x20
+        body[28] = 0x5D;                        // pop ebp
+        body[29] = 0xC3;                        // ret
     }
 
     private static uint NextNonZeroUInt32(Random rng)

@@ -35,6 +35,7 @@ public sealed class ProtectionPipeline
         return classification.Target.Kind switch
         {
             ProtectionTargetKind.NativePe => new NativePeBackend(),
+            ProtectionTargetKind.NativePeX86 => new NativeX86Backend(),
             ProtectionTargetKind.NativeAot => new NativeAotProtectionBackend(),
             ProtectionTargetKind.ManagedIl => new ManagedProtectionBackend(),
             _ => throw new NotSupportedException("RP_BACKEND_UNAVAILABLE: No protection backend is available for this artifact."),

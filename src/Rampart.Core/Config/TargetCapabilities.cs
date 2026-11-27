@@ -6,9 +6,23 @@ namespace Rampart.Config;
 /// method eligibility are independently required before a protection is applied.</summary>
 public static class TargetCapabilities
 {
+    private static readonly IReadOnlyDictionary<string, ProtectionLevel> NativeX86Levels =
+        new Dictionary<string, ProtectionLevel>(StringComparer.Ordinal)
+        {
+            ["packaging.symbol-scrub"] = ProtectionLevel.Maximum,
+            ["packaging.header-disguise"] = ProtectionLevel.Maximum,
+            ["packaging.ep-confusion"] = ProtectionLevel.Light,
+            ["analysis.ida-bomb"] = ProtectionLevel.Light,
+            ["analysis.hexrays-denial"] = ProtectionLevel.Light,
+            ["analysis.symbolic-denial"] = ProtectionLevel.Light,
+            ["analysis.static-decode-denial"] = ProtectionLevel.Light,
+        };
+
     public static ProtectionLevel MaximumLevel(string id, ProtectionTargetKind target) => target switch
     {
         ProtectionTargetKind.NativePe => ProtectionCapabilities.MaxReadyLevel(id),
+        ProtectionTargetKind.NativePeX86 => NativeX86Levels.TryGetValue(id, out ProtectionLevel level)
+            ? level : ProtectionLevel.Off,
         ProtectionTargetKind.NativeAot when id is "packaging.header-disguise" or "packaging.symbol-scrub"
             or "integrity.measurement-channels" or "response.tool-response" => ProtectionLevel.Light,
         ProtectionTargetKind.ManagedIl when id is "strings.encryption" or "code-transformation.mba-constants"

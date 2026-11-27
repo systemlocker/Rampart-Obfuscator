@@ -34,7 +34,7 @@ internal static class InspectCommand
         string path = Path.GetFullPath(positional[0]);
         byte[] bytes = ProtectionPipeline.ReadInput(path);
         var classification = TargetClassifier.Classify(bytes, path);
-        bool inspectNativePe = classification.Target.Kind == ProtectionTargetKind.NativePe
+        bool inspectNativePe = classification.Target.Kind is ProtectionTargetKind.NativePe or ProtectionTargetKind.NativePeX86
             || (classification.Target.Kind == ProtectionTargetKind.AlreadyProtected && HasRampartSection(bytes));
         if (!inspectNativePe)
         {
@@ -91,7 +91,10 @@ internal static class InspectCommand
         try
         {
             compatibility = PeCompatibility.Inspect(pe);
-            PeCompatibility.Validate(pe);
+            if (pe.Machine == MachineType.I386 && !pe.IsPe32Plus)
+                PeCompatibility.ValidateX86(pe);
+            else
+                PeCompatibility.Validate(pe);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or BadImageFormatException)
         {

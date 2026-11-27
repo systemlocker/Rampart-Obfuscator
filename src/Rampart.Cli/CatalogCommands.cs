@@ -27,6 +27,7 @@ internal static class CheckCommand
         var settings = settingsArgs.Build(catalog);
         var effectiveTarget = SettingsArguments.ResolveTargetKind(settings, detectedTarget: null);
         bool native = effectiveTarget == ProtectionTargetKind.NativePe;
+        bool nativeX86 = effectiveTarget == ProtectionTargetKind.NativePeX86;
         if (native)
         {
             ThreatDials.Apply(settings, catalog);
@@ -44,7 +45,15 @@ internal static class CheckCommand
                 throw new NativeAotCompatibilityException(rejected.ReasonCode, $"{rejected.Knob}: {rejected.Detail}");
         }
         var concerns = native ? ConcernRules.Evaluate(settings, catalog) : new List<Concern>();
-        int budget = native ? KnobCatalog.BudgetFor(settings, catalog) : 0;
+        int budget = native ? KnobCatalog.BudgetFor(settings, catalog)
+            : nativeX86 ? catalog.All.Sum(knob =>
+            {
+                ProtectionLevel requested = settings.Knobs.TryGetValue(knob.Id, out ProtectionLevel explicitLevel)
+                    ? explicitLevel : Presets.DefaultLevel(settings.Preset, knob);
+                ProtectionLevel effective = (ProtectionLevel)Math.Min((int)requested,
+                    (int)TargetCapabilities.MaximumLevel(knob.Id, effectiveTarget));
+                return knob.PointsAt(effective);
+            }) : 0;
 
         if (settingsArgs.Json)
         {

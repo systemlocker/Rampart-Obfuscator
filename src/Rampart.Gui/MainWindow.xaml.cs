@@ -161,7 +161,7 @@ public partial class MainWindow : Window
     private void ApplyTarget(ProtectionTargetKind target)
     {
         int cleared = _settings.Count(row => row.ApplyTarget(target));
-        bool nativePreset = target == ProtectionTargetKind.NativePe;
+        bool nativePreset = target is ProtectionTargetKind.NativePe or ProtectionTargetKind.NativePeX86;
         PresetCombo.IsEnabled = nativePreset;
         PresetHintText.Text = nativePreset
             ? "Explicit setting overrides take precedence."
@@ -180,7 +180,7 @@ public partial class MainWindow : Window
 
         settings.Preset = _targetKind switch
         {
-            ProtectionTargetKind.NativePe => PresetCombo.SelectedItem as string ?? Presets.Balanced,
+            ProtectionTargetKind.NativePe or ProtectionTargetKind.NativePeX86 => PresetCombo.SelectedItem as string ?? Presets.Balanced,
             ProtectionTargetKind.NativeAot => "off",
             _ => Presets.Balanced,
         };
@@ -357,7 +357,7 @@ public partial class MainWindow : Window
         CancelButton.IsEnabled = busy;
         CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         WorkerProgress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        PresetCombo.IsEnabled = !busy && _targetKind == ProtectionTargetKind.NativePe;
+        PresetCombo.IsEnabled = !busy && _targetKind is ProtectionTargetKind.NativePe or ProtectionTargetKind.NativePeX86;
         SettingsGrid.IsEnabled = !busy;
         OutputPathTextBox.IsEnabled = !busy;
         if (busy)
@@ -510,6 +510,7 @@ public partial class MainWindow : Window
         return target.Kind switch
         {
             ProtectionTargetKind.NativePe => $"Native Windows{architecture} executable",
+            ProtectionTargetKind.NativePeX86 => "Native Windows x86 executable",
             ProtectionTargetKind.NativeAot => $"Windows{architecture} NativeAOT executable",
             ProtectionTargetKind.ManagedIl when target.DeploymentShape == "managed-library" => "Managed .NET library",
             ProtectionTargetKind.ManagedIl when target.DeploymentShape == "managed-executable" => "Managed .NET executable",
@@ -528,6 +529,7 @@ public partial class MainWindow : Window
     private static string FormatKind(ProtectionTargetKind kind) => kind switch
     {
         ProtectionTargetKind.NativePe => "the native Windows target",
+        ProtectionTargetKind.NativePeX86 => "the native Windows x86 target",
         ProtectionTargetKind.NativeAot => "the Windows NativeAOT target",
         ProtectionTargetKind.ManagedIl => "the managed .NET target",
         ProtectionTargetKind.ReadyToRun => "ReadyToRun assembly",

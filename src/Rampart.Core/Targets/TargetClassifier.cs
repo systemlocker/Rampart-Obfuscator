@@ -123,12 +123,18 @@ public static class TargetClassifier
             return Result(ProtectionTargetKind.Unknown, TargetDisposition.Ambiguous,
                 "target.runtime-fingerprint-incomplete", arch, evidence: peEvidence);
 
-        bool nativeEligible = arch == "x64" && pe.Magic == PEMagic.PE32Plus
-            && !headers.CoffHeader.Characteristics.HasFlag(Characteristics.Dll);
-        return Result(ProtectionTargetKind.NativePe,
-            nativeEligible ? TargetDisposition.Supported : TargetDisposition.Unsupported,
-            nativeEligible ? "target.native-pe" : "target.native-platform", arch,
-            "native", "native-executable", signing, evidence: peEvidence);
+        bool executable = !headers.CoffHeader.Characteristics.HasFlag(Characteristics.Dll);
+        if (arch == "x64" && pe.Magic == PEMagic.PE32Plus && executable)
+            return Result(ProtectionTargetKind.NativePe, TargetDisposition.Supported,
+                "target.native-pe", arch, "native", "native-executable", signing,
+                evidence: peEvidence);
+        if (arch == "x86" && pe.Magic == PEMagic.PE32 && executable)
+            return Result(ProtectionTargetKind.NativePeX86, TargetDisposition.Supported,
+                "target.native-pe-x86", arch, "native", "native-executable", signing,
+                evidence: peEvidence);
+        return Result(ProtectionTargetKind.NativePe, TargetDisposition.Unsupported,
+            "target.native-platform", arch, "native", "native-executable", signing,
+            evidence: peEvidence);
     }
 
     private static TargetClassification ClassifyManaged(byte[] bytes, PEReader reader, CorHeader cor,

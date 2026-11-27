@@ -1,8 +1,8 @@
 # Rampart
 
 Rampart is a stable, open-source protector for Windows applications. It supports
-native x64 PE executables, pure managed IL assemblies, and eligible Windows x64
-NativeAOT publish outputs. Reproducible per-build transforms keep the
+native x64 and x86 PE executables, pure managed IL assemblies, and eligible
+Windows x64 NativeAOT publish outputs. Reproducible per-build transforms keep the
 configuration and resulting changes inspectable.
 
 Protect copies of your binaries, keep the original build artifacts, and test
@@ -42,6 +42,17 @@ silently downgrading.
 See [Protection coverage](FEATURES.md) for supported mechanisms, selection
 requirements, and compatibility limits.
 
+| Target | Supported surface |
+| --- | --- |
+| Native Windows x64 | Full native protection catalog described below, subject to each emitter's input contract. |
+| Native Windows x86 | PE metadata and symbol cleanup, header disguise, register-preserving entry routing, and four architecture-specific static-analysis decoy families. |
+| Managed IL | Strings, constants, control flow, selected-method virtualization, metadata hygiene, integrity, and conservative private-member renaming. |
+| Windows x64 NativeAOT | Conservative post-link metadata transforms plus opt-in one-time code measurement and clean response. |
+
+The following level table describes the native x64 catalog. The x86, managed,
+and NativeAOT ceilings are target-specific and are shown by the desktop interface,
+`rampart protect --dry-run --json`, and `rampart check --target <kind>`.
+
 | Protection | Verified through |
 | --- | --- |
 | Symbol scrub | Maximum |
@@ -71,11 +82,13 @@ requirements, and compatibility limits.
 | Nested VM and invocation-owned bytecode re-keying | Light |
 | Exception-dispatched branches and control-flow edges | Light |
 
-The native PE backend targets PE32+ AMD64 executables and preserves ASLR
-relocations and overlays. The managed backend accepts supported pure-IL .NET
-assemblies. The NativeAOT backend admits only structurally recognized Windows x64
-outputs and a small verified pass allowlist, including optional one-time startup
-code measurement and clean tamper response. Apphosts, ReadyToRun images,
+The native x64 backend targets PE32+ AMD64 executables and preserves ASLR
+relocations and overlays. The native x86 backend accepts PE32 I386 executables
+and uses an independent Win32-safe pass allowlist; it never feeds x64 ABI stubs
+to a 32-bit image. The managed backend accepts supported pure-IL .NET assemblies.
+The NativeAOT backend admits only structurally recognized Windows x64 outputs and
+a small verified pass allowlist, including optional one-time startup code
+measurement and clean tamper response. Apphosts, ReadyToRun images,
 single-file bundles, mixed-mode assemblies, and already-protected inputs are
 identified and rejected with stage-specific guidance. Because binary transforms
 invalidate Authenticode, sign the protected output rather than the input binary.
