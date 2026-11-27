@@ -1,0 +1,1966 @@
+#nullable enable
+const Rampart.Config.KnobGroups.AnalysisCrashers = "analysis-crashers" -> string!
+const Rampart.Config.KnobGroups.AntiDebug = "anti-debug" -> string!
+const Rampart.Config.KnobGroups.AntiInject = "anti-inject" -> string!
+const Rampart.Config.KnobGroups.AntiSandbox = "anti-sandbox" -> string!
+const Rampart.Config.KnobGroups.CodeTransformation = "code-transformation" -> string!
+const Rampart.Config.KnobGroups.IntegrityBinding = "integrity-binding" -> string!
+const Rampart.Config.KnobGroups.MemoryProtection = "memory-protection" -> string!
+const Rampart.Config.KnobGroups.Packaging = "packaging" -> string!
+const Rampart.Config.KnobGroups.Response = "response" -> string!
+const Rampart.Config.KnobGroups.StringProtection = "string-protection" -> string!
+const Rampart.Config.KnobGroups.Virtualization = "virtualization" -> string!
+const Rampart.Config.Presets.Balanced = "balanced" -> string!
+const Rampart.Config.Presets.Heavy = "heavy" -> string!
+const Rampart.Config.Presets.Light = "light" -> string!
+const Rampart.Config.Presets.Maximum = "maximum" -> string!
+const Rampart.Config.Presets.Nuclear = "nuclear" -> string!
+const Rampart.Config.ThreatTags.Debug = "debug" -> string!
+const Rampart.Config.ThreatTags.Dump = "dump" -> string!
+const Rampart.Config.ThreatTags.Inject = "inject" -> string!
+const Rampart.Config.ThreatTags.Kernel = "kernel" -> string!
+const Rampart.Config.ThreatTags.Sandbox = "sandbox" -> string!
+const Rampart.Config.ThreatTags.Static = "static" -> string!
+const Rampart.Config.ThreatTags.Tools = "tools" -> string!
+const Rampart.ControlFlow.LeafExceptionDispatcher.ContextFlagsOffset = 68 -> int
+const Rampart.ControlFlow.LeafExceptionDispatcher.ContextRipOffset = 248 -> int
+const Rampart.ControlFlow.LeafExceptionDispatcher.ExceptionCode = 3221225501 -> uint
+const Rampart.Engine.Passes.ControlFlowFlatteningPass.KnobId = "code-transformation.flattening" -> string!
+const Rampart.Engine.RuntimeDetectionStateLayout.CodeMeasurementOffset = 40 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.DetectionFlagsOffset = 24 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.EnabledChecksOffset = 16 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.IatBaselineOffset = 48 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.MagicOffset = 0 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.PolicyStatusOffset = 56 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.RecordSize = 80 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.RespondedFlagsOffset = 64 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.SessionKeyOffset = 32 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.SizeOffset = 12 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.TlsCallbacksRvaOffset = 72 -> int
+const Rampart.Engine.RuntimeDetectionStateLayout.VersionOffset = 8 -> int
+const Rampart.NativeAot.NativeAotInvariantSnapshot.MaximumImportDescriptors = 4096 -> int
+const Rampart.NativeAot.NativeAotInvariantSnapshot.MaximumImportThunks = 65536 -> int
+const Rampart.NativeAot.NativeAotInvariantSnapshot.MaximumRuntimeFunctions = 1000000 -> int
+const Rampart.Pe.DataDir.Architecture = 7 -> int
+const Rampart.Pe.DataDir.Basereloc = 5 -> int
+const Rampart.Pe.DataDir.BoundImport = 11 -> int
+const Rampart.Pe.DataDir.ComDescriptor = 14 -> int
+const Rampart.Pe.DataDir.Debug = 6 -> int
+const Rampart.Pe.DataDir.DelayImport = 13 -> int
+const Rampart.Pe.DataDir.Exception = 3 -> int
+const Rampart.Pe.DataDir.Export = 0 -> int
+const Rampart.Pe.DataDir.GlobalPtr = 8 -> int
+const Rampart.Pe.DataDir.Iat = 12 -> int
+const Rampart.Pe.DataDir.Import = 1 -> int
+const Rampart.Pe.DataDir.LoadConfig = 10 -> int
+const Rampart.Pe.DataDir.Resource = 2 -> int
+const Rampart.Pe.DataDir.Security = 4 -> int
+const Rampart.Pe.DataDir.Tls = 9 -> int
+const Rampart.Pe.ExtendedDllCharacteristicsEditor.CetCompatible = 1 -> ushort
+const Rampart.Pe.ExtendedDllCharacteristicsEditor.ImageDebugTypeExtendedDllCharacteristics = 20 -> uint
+const Rampart.Pe.PeImage.DosMagic = 23117 -> ushort
+const Rampart.Pe.PeImage.MagicPe32 = 267 -> ushort
+const Rampart.Pe.PeImage.MagicPe32Plus = 523 -> ushort
+const Rampart.Pe.PeImage.PeSignature = 17744 -> uint
+const Rampart.Pe.Relocations.TypeAbsolute = 10 -> ushort
+const Rampart.Pe.Relocations.TypeHighLow = 3 -> ushort
+const Rampart.Targets.TargetClassifier.MaximumInputBytes = 536870912 -> int
+override Rampart.Config.Concern.Equals(object? obj) -> bool
+override Rampart.Config.Concern.GetHashCode() -> int
+override Rampart.Config.Concern.ToString() -> string!
+override Rampart.Config.KnobDef.Equals(object? obj) -> bool
+override Rampart.Config.KnobDef.GetHashCode() -> int
+override Rampart.Config.KnobDef.ToString() -> string!
+override Rampart.ControlFlow.CompiledExceptionLeaf.Equals(object? obj) -> bool
+override Rampart.ControlFlow.CompiledExceptionLeaf.GetHashCode() -> int
+override Rampart.ControlFlow.CompiledExceptionLeaf.ToString() -> string!
+override Rampart.ControlFlow.ImageExceptionTransition.Equals(object? obj) -> bool
+override Rampart.ControlFlow.ImageExceptionTransition.GetHashCode() -> int
+override Rampart.ControlFlow.ImageExceptionTransition.ToString() -> string!
+override Rampart.ControlFlow.LeafExceptionTransition.Equals(object? obj) -> bool
+override Rampart.ControlFlow.LeafExceptionTransition.GetHashCode() -> int
+override Rampart.ControlFlow.LeafExceptionTransition.ToString() -> string!
+override Rampart.Engine.BuildLogEntry.Equals(object? obj) -> bool
+override Rampart.Engine.BuildLogEntry.GetHashCode() -> int
+override Rampart.Engine.BuildLogEntry.ToString() -> string!
+override Rampart.Engine.FunctionDescriptor.Equals(object? obj) -> bool
+override Rampart.Engine.FunctionDescriptor.GetHashCode() -> int
+override Rampart.Engine.FunctionDescriptor.ToString() -> string!
+override Rampart.Engine.FunctionTransformation.Equals(object? obj) -> bool
+override Rampart.Engine.FunctionTransformation.GetHashCode() -> int
+override Rampart.Engine.FunctionTransformation.ToString() -> string!
+override Rampart.Engine.PeCompatibilityFeatures.Equals(object? obj) -> bool
+override Rampart.Engine.PeCompatibilityFeatures.GetHashCode() -> int
+override Rampart.Engine.PeCompatibilityFeatures.ToString() -> string!
+override Rampart.Engine.RuntimeDetectionStateLayout.Equals(object? obj) -> bool
+override Rampart.Engine.RuntimeDetectionStateLayout.GetHashCode() -> int
+override Rampart.Engine.RuntimeDetectionStateLayout.ToString() -> string!
+override Rampart.Managed.ManagedCoverage.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedCoverage.GetHashCode() -> int
+override Rampart.Managed.ManagedCoverage.ToString() -> string!
+override Rampart.Managed.ManagedCoverageReason.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedCoverageReason.GetHashCode() -> int
+override Rampart.Managed.ManagedCoverageReason.ToString() -> string!
+override Rampart.Managed.ManagedFrameworkBinding.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedFrameworkBinding.GetHashCode() -> int
+override Rampart.Managed.ManagedFrameworkBinding.ToString() -> string!
+override Rampart.Managed.ManagedMethodEvidence.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedMethodEvidence.GetHashCode() -> int
+override Rampart.Managed.ManagedMethodEvidence.ToString() -> string!
+override Rampart.Managed.ManagedMethodIdentity.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedMethodIdentity.GetHashCode() -> int
+override Rampart.Managed.ManagedMethodIdentity.ToString() -> string!
+override Rampart.Managed.ManagedProtectionCoverage.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedProtectionCoverage.GetHashCode() -> int
+override Rampart.Managed.ManagedProtectionCoverage.ToString() -> string!
+override Rampart.Managed.ManagedProtectionResult.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedProtectionResult.GetHashCode() -> int
+override Rampart.Managed.ManagedProtectionResult.ToString() -> string!
+override Rampart.Managed.ManagedRenameEvidence.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedRenameEvidence.GetHashCode() -> int
+override Rampart.Managed.ManagedRenameEvidence.ToString() -> string!
+override Rampart.Managed.ManagedSequencePointMapping.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedSequencePointMapping.GetHashCode() -> int
+override Rampart.Managed.ManagedSequencePointMapping.ToString() -> string!
+override Rampart.Managed.ManagedSiteCoverageReason.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedSiteCoverageReason.GetHashCode() -> int
+override Rampart.Managed.ManagedSiteCoverageReason.ToString() -> string!
+override Rampart.Managed.ManagedSiteEvidence.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedSiteEvidence.GetHashCode() -> int
+override Rampart.Managed.ManagedSiteEvidence.ToString() -> string!
+override Rampart.Managed.ManagedTokenMapping.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedTokenMapping.GetHashCode() -> int
+override Rampart.Managed.ManagedTokenMapping.ToString() -> string!
+override Rampart.Managed.ManagedVerificationReference.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedVerificationReference.GetHashCode() -> int
+override Rampart.Managed.ManagedVerificationReference.ToString() -> string!
+override Rampart.Managed.ManagedVerificationReport.Equals(object? obj) -> bool
+override Rampart.Managed.ManagedVerificationReport.GetHashCode() -> int
+override Rampart.Managed.ManagedVerificationReport.ToString() -> string!
+override Rampart.NativeAot.NativeAotInvariantEvidence.Equals(object? obj) -> bool
+override Rampart.NativeAot.NativeAotInvariantEvidence.GetHashCode() -> int
+override Rampart.NativeAot.NativeAotInvariantEvidence.ToString() -> string!
+override Rampart.NativeAot.NativeAotOwnedRange.Equals(object? obj) -> bool
+override Rampart.NativeAot.NativeAotOwnedRange.GetHashCode() -> int
+override Rampart.NativeAot.NativeAotOwnedRange.ToString() -> string!
+override Rampart.NativeAot.NativeAotPassEvidence.Equals(object? obj) -> bool
+override Rampart.NativeAot.NativeAotPassEvidence.GetHashCode() -> int
+override Rampart.NativeAot.NativeAotPassEvidence.ToString() -> string!
+override Rampart.NativeAot.NativeAotReport.Equals(object? obj) -> bool
+override Rampart.NativeAot.NativeAotReport.GetHashCode() -> int
+override Rampart.NativeAot.NativeAotReport.ToString() -> string!
+override Rampart.NativeAot.NativeAotResult.Equals(object? obj) -> bool
+override Rampart.NativeAot.NativeAotResult.GetHashCode() -> int
+override Rampart.NativeAot.NativeAotResult.ToString() -> string!
+override Rampart.NativeTransforms.CompiledNativeLeaf.Equals(object? obj) -> bool
+override Rampart.NativeTransforms.CompiledNativeLeaf.GetHashCode() -> int
+override Rampart.NativeTransforms.CompiledNativeLeaf.ToString() -> string!
+override Rampart.NativeTransforms.NativeTransformOptions.Equals(object? obj) -> bool
+override Rampart.NativeTransforms.NativeTransformOptions.GetHashCode() -> int
+override Rampart.NativeTransforms.NativeTransformOptions.ToString() -> string!
+override Rampart.Pe.DataDirectory.Equals(object? obj) -> bool
+override Rampart.Pe.DataDirectory.GetHashCode() -> int
+override Rampart.Pe.DataDirectory.ToString() -> string!
+override Rampart.Pe.ImportedFunction.Equals(object? obj) -> bool
+override Rampart.Pe.ImportedFunction.GetHashCode() -> int
+override Rampart.Pe.ImportedFunction.ToString() -> string!
+override Rampart.Pe.PeImage.Section.ToString() -> string!
+override Rampart.Pe.RelocEntry.GetHashCode() -> int
+override Rampart.Pe.RuntimeFunction.GetHashCode() -> int
+override Rampart.Targets.ArtifactGraph.Equals(object? obj) -> bool
+override Rampart.Targets.ArtifactGraph.GetHashCode() -> int
+override Rampart.Targets.ArtifactGraph.ToString() -> string!
+override Rampart.Targets.ArtifactNode.Equals(object? obj) -> bool
+override Rampart.Targets.ArtifactNode.GetHashCode() -> int
+override Rampart.Targets.ArtifactNode.ToString() -> string!
+override Rampart.Targets.ArtifactSigningInstructions.Equals(object? obj) -> bool
+override Rampart.Targets.ArtifactSigningInstructions.GetHashCode() -> int
+override Rampart.Targets.ArtifactSigningInstructions.ToString() -> string!
+override Rampart.Targets.OutputArtifact.Equals(object? obj) -> bool
+override Rampart.Targets.OutputArtifact.GetHashCode() -> int
+override Rampart.Targets.OutputArtifact.ToString() -> string!
+override Rampart.Targets.PlannedProtection.Equals(object? obj) -> bool
+override Rampart.Targets.PlannedProtection.GetHashCode() -> int
+override Rampart.Targets.PlannedProtection.ToString() -> string!
+override Rampart.Targets.ProtectionEvidence.Equals(object? obj) -> bool
+override Rampart.Targets.ProtectionEvidence.GetHashCode() -> int
+override Rampart.Targets.ProtectionEvidence.ToString() -> string!
+override Rampart.Targets.ProtectionMeasurement.Equals(object? obj) -> bool
+override Rampart.Targets.ProtectionMeasurement.GetHashCode() -> int
+override Rampart.Targets.ProtectionMeasurement.ToString() -> string!
+override Rampart.Targets.ProtectionPlan.Equals(object? obj) -> bool
+override Rampart.Targets.ProtectionPlan.GetHashCode() -> int
+override Rampart.Targets.ProtectionPlan.ToString() -> string!
+override Rampart.Targets.ProtectionSubject.Equals(object? obj) -> bool
+override Rampart.Targets.ProtectionSubject.GetHashCode() -> int
+override Rampart.Targets.ProtectionSubject.ToString() -> string!
+override Rampart.Targets.ProtectionTarget.Equals(object? obj) -> bool
+override Rampart.Targets.ProtectionTarget.GetHashCode() -> int
+override Rampart.Targets.ProtectionTarget.ToString() -> string!
+override Rampart.Targets.TargetClassification.Equals(object? obj) -> bool
+override Rampart.Targets.TargetClassification.GetHashCode() -> int
+override Rampart.Targets.TargetClassification.ToString() -> string!
+override Rampart.Virtualization.CompiledLeafVm.Equals(object? obj) -> bool
+override Rampart.Virtualization.CompiledLeafVm.GetHashCode() -> int
+override Rampart.Virtualization.CompiledLeafVm.ToString() -> string!
+override Rampart.Virtualization.LeafVmOptions.Equals(object? obj) -> bool
+override Rampart.Virtualization.LeafVmOptions.GetHashCode() -> int
+override Rampart.Virtualization.LeafVmOptions.ToString() -> string!
+override Rampart.X64.X64Instruction.GetHashCode() -> int
+Rampart.Codecs.Aes128Ctr
+Rampart.Codecs.Lzss
+Rampart.Config.CompatibilityPolicy
+Rampart.Config.CompatibilityPolicy.Preserve = 0 -> Rampart.Config.CompatibilityPolicy
+Rampart.Config.CompatibilityPolicy.Strict = 2 -> Rampart.Config.CompatibilityPolicy
+Rampart.Config.CompatibilityPolicy.Warn = 1 -> Rampart.Config.CompatibilityPolicy
+Rampart.Config.Concern
+Rampart.Config.Concern.<Clone>$() -> Rampart.Config.Concern!
+Rampart.Config.Concern.Code.get -> string!
+Rampart.Config.Concern.Code.init -> void
+Rampart.Config.Concern.Concern(Rampart.Config.ConcernSeverity Severity, string! Code, string! Message, string? Suggestion = null) -> void
+Rampart.Config.Concern.Deconstruct(out Rampart.Config.ConcernSeverity Severity, out string! Code, out string! Message, out string? Suggestion) -> void
+Rampart.Config.Concern.Equals(Rampart.Config.Concern? other) -> bool
+Rampart.Config.Concern.Message.get -> string!
+Rampart.Config.Concern.Message.init -> void
+Rampart.Config.Concern.Severity.get -> Rampart.Config.ConcernSeverity
+Rampart.Config.Concern.Severity.init -> void
+Rampart.Config.Concern.Suggestion.get -> string?
+Rampart.Config.Concern.Suggestion.init -> void
+Rampart.Config.ConcernRules
+Rampart.Config.ConcernSeverity
+Rampart.Config.ConcernSeverity.Info = 0 -> Rampart.Config.ConcernSeverity
+Rampart.Config.ConcernSeverity.Risky = 2 -> Rampart.Config.ConcernSeverity
+Rampart.Config.ConcernSeverity.Warning = 1 -> Rampart.Config.ConcernSeverity
+Rampart.Config.KnobCatalog
+Rampart.Config.KnobCatalog.All.get -> System.Collections.Generic.IReadOnlyList<Rampart.Config.KnobDef!>!
+Rampart.Config.KnobCatalog.Count.get -> int
+Rampart.Config.KnobCatalog.Get(string! id) -> Rampart.Config.KnobDef!
+Rampart.Config.KnobCatalog.InGroup(string! group) -> System.Collections.Generic.IEnumerable<Rampart.Config.KnobDef!>!
+Rampart.Config.KnobCatalog.KnobCatalog(System.Collections.Generic.IEnumerable<Rampart.Config.KnobDef!>! knobs) -> void
+Rampart.Config.KnobCatalog.TryGet(string! id, out Rampart.Config.KnobDef! knob) -> bool
+Rampart.Config.KnobCatalogData
+Rampart.Config.KnobDef
+Rampart.Config.KnobDef.<Clone>$() -> Rampart.Config.KnobDef!
+Rampart.Config.KnobDef.Deconstruct(out string! Id, out string! Group, out string! Name, out string! Summary, out int[]! Points, out string![]! LevelTexts, out string![]! Tags) -> void
+Rampart.Config.KnobDef.Equals(Rampart.Config.KnobDef? other) -> bool
+Rampart.Config.KnobDef.Group.get -> string!
+Rampart.Config.KnobDef.Group.init -> void
+Rampart.Config.KnobDef.HasTag(string! tag) -> bool
+Rampart.Config.KnobDef.Id.get -> string!
+Rampart.Config.KnobDef.Id.init -> void
+Rampart.Config.KnobDef.KnobDef(string! Id, string! Group, string! Name, string! Summary, int[]! Points, string![]! LevelTexts, string![]! Tags) -> void
+Rampart.Config.KnobDef.LevelText(Rampart.Config.ProtectionLevel level) -> string!
+Rampart.Config.KnobDef.LevelTexts.get -> string![]!
+Rampart.Config.KnobDef.LevelTexts.init -> void
+Rampart.Config.KnobDef.Name.get -> string!
+Rampart.Config.KnobDef.Name.init -> void
+Rampart.Config.KnobDef.Points.get -> int[]!
+Rampart.Config.KnobDef.Points.init -> void
+Rampart.Config.KnobDef.PointsAt(Rampart.Config.ProtectionLevel level) -> int
+Rampart.Config.KnobDef.Summary.get -> string!
+Rampart.Config.KnobDef.Summary.init -> void
+Rampart.Config.KnobDef.Tags.get -> string![]!
+Rampart.Config.KnobDef.Tags.init -> void
+Rampart.Config.KnobGroups
+Rampart.Config.ManagedMethodRule
+Rampart.Config.ManagedMethodRule.Assembly.get -> string!
+Rampart.Config.ManagedMethodRule.Assembly.set -> void
+Rampart.Config.ManagedMethodRule.Constants.get -> bool?
+Rampart.Config.ManagedMethodRule.Constants.set -> void
+Rampart.Config.ManagedMethodRule.ControlFlow.get -> bool?
+Rampart.Config.ManagedMethodRule.ControlFlow.set -> void
+Rampart.Config.ManagedMethodRule.GeneratedCode.get -> bool?
+Rampart.Config.ManagedMethodRule.GeneratedCode.set -> void
+Rampart.Config.ManagedMethodRule.Include.get -> bool?
+Rampart.Config.ManagedMethodRule.Include.set -> void
+Rampart.Config.ManagedMethodRule.ManagedMethodRule() -> void
+Rampart.Config.ManagedMethodRule.MetadataToken.get -> int?
+Rampart.Config.ManagedMethodRule.MetadataToken.set -> void
+Rampart.Config.ManagedMethodRule.Method.get -> string!
+Rampart.Config.ManagedMethodRule.Method.set -> void
+Rampart.Config.ManagedMethodRule.Module.get -> string!
+Rampart.Config.ManagedMethodRule.Module.set -> void
+Rampart.Config.ManagedMethodRule.Namespace.get -> string!
+Rampart.Config.ManagedMethodRule.Namespace.set -> void
+Rampart.Config.ManagedMethodRule.RenamePrivateMembers.get -> bool?
+Rampart.Config.ManagedMethodRule.RenamePrivateMembers.set -> void
+Rampart.Config.ManagedMethodRule.Signature.get -> string!
+Rampart.Config.ManagedMethodRule.Signature.set -> void
+Rampart.Config.ManagedMethodRule.SourceDocument.get -> string!
+Rampart.Config.ManagedMethodRule.SourceDocument.set -> void
+Rampart.Config.ManagedMethodRule.Strings.get -> bool?
+Rampart.Config.ManagedMethodRule.Strings.set -> void
+Rampart.Config.ManagedMethodRule.Type.get -> string!
+Rampart.Config.ManagedMethodRule.Type.set -> void
+Rampart.Config.ManagedMethodRule.Virtualize.get -> bool?
+Rampart.Config.ManagedMethodRule.Virtualize.set -> void
+Rampart.Config.ManagedProtectionOptions
+Rampart.Config.ManagedProtectionOptions.Constants.get -> bool
+Rampart.Config.ManagedProtectionOptions.Constants.set -> void
+Rampart.Config.ManagedProtectionOptions.ControlFlow.get -> bool
+Rampart.Config.ManagedProtectionOptions.ControlFlow.set -> void
+Rampart.Config.ManagedProtectionOptions.EphemeralVmPrograms.get -> bool
+Rampart.Config.ManagedProtectionOptions.EphemeralVmPrograms.set -> void
+Rampart.Config.ManagedProtectionOptions.HardenedRuntime.get -> bool
+Rampart.Config.ManagedProtectionOptions.HardenedRuntime.set -> void
+Rampart.Config.ManagedProtectionOptions.Integrity.get -> bool
+Rampart.Config.ManagedProtectionOptions.Integrity.set -> void
+Rampart.Config.ManagedProtectionOptions.KeepFileEnvironmentVariable.get -> string?
+Rampart.Config.ManagedProtectionOptions.KeepFileEnvironmentVariable.set -> void
+Rampart.Config.ManagedProtectionOptions.KeepPatterns.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ManagedProtectionOptions.KeepPatterns.set -> void
+Rampart.Config.ManagedProtectionOptions.ManagedProtectionOptions() -> void
+Rampart.Config.ManagedProtectionOptions.MaximumInputBytes.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumInputBytes.set -> void
+Rampart.Config.ManagedProtectionOptions.MaximumMetadataRows.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumMetadataRows.set -> void
+Rampart.Config.ManagedProtectionOptions.MaximumMethodBytes.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumMethodBytes.set -> void
+Rampart.Config.ManagedProtectionOptions.MaximumMethods.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumMethods.set -> void
+Rampart.Config.ManagedProtectionOptions.MaximumOutputGrowthPercent.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumOutputGrowthPercent.set -> void
+Rampart.Config.ManagedProtectionOptions.MaximumProtectionMilliseconds.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumProtectionMilliseconds.set -> void
+Rampart.Config.ManagedProtectionOptions.MaximumVmInstructionCount.get -> int
+Rampart.Config.ManagedProtectionOptions.MaximumVmInstructionCount.set -> void
+Rampart.Config.ManagedProtectionOptions.MetadataHygiene.get -> bool
+Rampart.Config.ManagedProtectionOptions.MetadataHygiene.set -> void
+Rampart.Config.ManagedProtectionOptions.PreserveDebugSymbols.get -> bool
+Rampart.Config.ManagedProtectionOptions.PreserveDebugSymbols.set -> void
+Rampart.Config.ManagedProtectionOptions.RemoveWatermark.get -> bool
+Rampart.Config.ManagedProtectionOptions.RemoveWatermark.set -> void
+Rampart.Config.ManagedProtectionOptions.RenamePrivateMembers.get -> bool
+Rampart.Config.ManagedProtectionOptions.RenamePrivateMembers.set -> void
+Rampart.Config.ManagedProtectionOptions.RequireVirtualization.get -> bool
+Rampart.Config.ManagedProtectionOptions.RequireVirtualization.set -> void
+Rampart.Config.ManagedProtectionOptions.Rules.get -> System.Collections.Generic.List<Rampart.Config.ManagedMethodRule!>!
+Rampart.Config.ManagedProtectionOptions.Rules.set -> void
+Rampart.Config.ManagedProtectionOptions.StrictCompatibility.get -> bool
+Rampart.Config.ManagedProtectionOptions.StrictCompatibility.set -> void
+Rampart.Config.ManagedProtectionOptions.Strings.get -> bool
+Rampart.Config.ManagedProtectionOptions.Strings.set -> void
+Rampart.Config.ManagedProtectionOptions.StrongNameKeyEnvironmentVariable.get -> string?
+Rampart.Config.ManagedProtectionOptions.StrongNameKeyEnvironmentVariable.set -> void
+Rampart.Config.ManagedProtectionOptions.Verification.get -> Rampart.Config.ManagedVerificationOptions?
+Rampart.Config.ManagedProtectionOptions.Verification.set -> void
+Rampart.Config.ManagedProtectionOptions.Virtualize.get -> bool
+Rampart.Config.ManagedProtectionOptions.Virtualize.set -> void
+Rampart.Config.ManagedProtectionOptions.Watermark.get -> string?
+Rampart.Config.ManagedProtectionOptions.Watermark.set -> void
+Rampart.Config.ManagedVerificationOptions
+Rampart.Config.ManagedVerificationOptions.FrameworkReferencePaths.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ManagedVerificationOptions.FrameworkReferencePaths.set -> void
+Rampart.Config.ManagedVerificationOptions.ManagedVerificationOptions() -> void
+Rampart.Config.ManagedVerificationOptions.MaximumReferenceBytes.get -> long
+Rampart.Config.ManagedVerificationOptions.MaximumReferenceBytes.set -> void
+Rampart.Config.ManagedVerificationOptions.MaximumReferenceCount.get -> int
+Rampart.Config.ManagedVerificationOptions.MaximumReferenceCount.set -> void
+Rampart.Config.ManagedVerificationOptions.ReferencePaths.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ManagedVerificationOptions.ReferencePaths.set -> void
+Rampart.Config.ManagedVerificationOptions.SystemModuleName.get -> string?
+Rampart.Config.ManagedVerificationOptions.SystemModuleName.set -> void
+Rampart.Config.NativeAotProtectionOptions
+Rampart.Config.NativeAotProtectionOptions.AuditOnly.get -> bool
+Rampart.Config.NativeAotProtectionOptions.AuditOnly.set -> void
+Rampart.Config.NativeAotProtectionOptions.NativeAotProtectionOptions() -> void
+Rampart.Config.NativeAotProtectionOptions.PrepareForSigning.get -> bool
+Rampart.Config.NativeAotProtectionOptions.PrepareForSigning.set -> void
+Rampart.Config.Presets
+Rampart.Config.ProtectionCapabilities
+Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionLevel.Balanced = 2 -> Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionLevel.Heavy = 3 -> Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionLevel.Light = 1 -> Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionLevel.Maximum = 4 -> Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionLevel.Off = 0 -> Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionLevelExtensions
+Rampart.Config.ProtectionRule
+Rampart.Config.ProtectionRule.EndRva.get -> uint?
+Rampart.Config.ProtectionRule.EndRva.set -> void
+Rampart.Config.ProtectionRule.Knobs.get -> System.Collections.Generic.Dictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Config.ProtectionRule.Knobs.init -> void
+Rampart.Config.ProtectionRule.Match.get -> string!
+Rampart.Config.ProtectionRule.Match.set -> void
+Rampart.Config.ProtectionRule.Preset.get -> string?
+Rampart.Config.ProtectionRule.Preset.set -> void
+Rampart.Config.ProtectionRule.ProtectionRule() -> void
+Rampart.Config.ProtectionRule.Scope.get -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRule.Scope.set -> void
+Rampart.Config.ProtectionRule.StartRva.get -> uint?
+Rampart.Config.ProtectionRule.StartRva.set -> void
+Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Any = 0 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Module = 3 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Namespace = 2 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Rva = 6 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Section = 4 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Source = 5 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionRuleScope.Symbol = 1 -> Rampart.Config.ProtectionRuleScope
+Rampart.Config.ProtectionSelection
+Rampart.Config.ProtectionSettings
+Rampart.Config.ProtectionSettings.CustomMessage.get -> string?
+Rampart.Config.ProtectionSettings.CustomMessage.set -> void
+Rampart.Config.ProtectionSettings.ExcludeSymbols.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ProtectionSettings.ExcludeSymbols.init -> void
+Rampart.Config.ProtectionSettings.IncludeRvaRanges.get -> System.Collections.Generic.List<Rampart.Config.RvaRange!>!
+Rampart.Config.ProtectionSettings.IncludeRvaRanges.init -> void
+Rampart.Config.ProtectionSettings.IncludeSymbols.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ProtectionSettings.IncludeSymbols.init -> void
+Rampart.Config.ProtectionSettings.Knobs.get -> System.Collections.Generic.Dictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Config.ProtectionSettings.Knobs.init -> void
+Rampart.Config.ProtectionSettings.LevelOf(Rampart.Config.KnobDef! knob) -> Rampart.Config.ProtectionLevel
+Rampart.Config.ProtectionSettings.PdbTool.get -> string?
+Rampart.Config.ProtectionSettings.PdbTool.set -> void
+Rampart.Config.ProtectionSettings.Preset.get -> string!
+Rampart.Config.ProtectionSettings.Preset.set -> void
+Rampart.Config.ProtectionSettings.ProtectionSettings() -> void
+Rampart.Config.ProtectionSettings.Rules.get -> System.Collections.Generic.List<Rampart.Config.ProtectionRule!>!
+Rampart.Config.ProtectionSettings.Rules.init -> void
+Rampart.Config.ProtectionSettings.Seed.get -> long
+Rampart.Config.ProtectionSettings.Seed.set -> void
+Rampart.Config.ProtectionSettings.SymbolSources.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ProtectionSettings.SymbolSources.init -> void
+Rampart.Config.ProtectionSettings.Targets.get -> Rampart.Config.TargetProtectionOptions?
+Rampart.Config.ProtectionSettings.Targets.set -> void
+Rampart.Config.ProtectionSettings.ThreatFocus.get -> System.Collections.Generic.List<string!>!
+Rampart.Config.ProtectionSettings.ThreatFocus.init -> void
+Rampart.Config.ProtectionSettings.Watermark.get -> string?
+Rampart.Config.ProtectionSettings.Watermark.set -> void
+Rampart.Config.ProtectionSettingsJson
+Rampart.Config.RvaRange
+Rampart.Config.RvaRange.End.get -> uint
+Rampart.Config.RvaRange.End.set -> void
+Rampart.Config.RvaRange.RvaRange() -> void
+Rampart.Config.RvaRange.Start.get -> uint
+Rampart.Config.RvaRange.Start.set -> void
+Rampart.Config.TargetCapabilities
+Rampart.Config.TargetProtectionOptions
+Rampart.Config.TargetProtectionOptions.Compatibility.get -> Rampart.Config.CompatibilityPolicy
+Rampart.Config.TargetProtectionOptions.Compatibility.set -> void
+Rampart.Config.TargetProtectionOptions.Managed.get -> Rampart.Config.ManagedProtectionOptions?
+Rampart.Config.TargetProtectionOptions.Managed.set -> void
+Rampart.Config.TargetProtectionOptions.NativeAot.get -> Rampart.Config.NativeAotProtectionOptions?
+Rampart.Config.TargetProtectionOptions.NativeAot.set -> void
+Rampart.Config.TargetProtectionOptions.Override.get -> Rampart.Targets.ProtectionTargetKind?
+Rampart.Config.TargetProtectionOptions.Override.set -> void
+Rampart.Config.TargetProtectionOptions.TargetProtectionOptions() -> void
+Rampart.Config.TargetProtectionOptions.Validate() -> void
+Rampart.Config.TargetProtectionOptions.Version.get -> int
+Rampart.Config.TargetProtectionOptions.Version.set -> void
+Rampart.Config.ThreatDials
+Rampart.Config.ThreatTags
+Rampart.ControlFlow.CompiledExceptionLeaf
+Rampart.ControlFlow.CompiledExceptionLeaf.<Clone>$() -> Rampart.ControlFlow.CompiledExceptionLeaf!
+Rampart.ControlFlow.CompiledExceptionLeaf.Code.get -> byte[]!
+Rampart.ControlFlow.CompiledExceptionLeaf.Code.init -> void
+Rampart.ControlFlow.CompiledExceptionLeaf.CompiledExceptionLeaf(byte[]! Code, System.Collections.Generic.IReadOnlyList<Rampart.ControlFlow.LeafExceptionTransition!>! Transitions, int ConditionalTransitions, int OtherTransitions) -> void
+Rampart.ControlFlow.CompiledExceptionLeaf.ConditionalTransitions.get -> int
+Rampart.ControlFlow.CompiledExceptionLeaf.ConditionalTransitions.init -> void
+Rampart.ControlFlow.CompiledExceptionLeaf.Deconstruct(out byte[]! Code, out System.Collections.Generic.IReadOnlyList<Rampart.ControlFlow.LeafExceptionTransition!>! Transitions, out int ConditionalTransitions, out int OtherTransitions) -> void
+Rampart.ControlFlow.CompiledExceptionLeaf.Equals(Rampart.ControlFlow.CompiledExceptionLeaf? other) -> bool
+Rampart.ControlFlow.CompiledExceptionLeaf.OtherTransitions.get -> int
+Rampart.ControlFlow.CompiledExceptionLeaf.OtherTransitions.init -> void
+Rampart.ControlFlow.CompiledExceptionLeaf.Transitions.get -> System.Collections.Generic.IReadOnlyList<Rampart.ControlFlow.LeafExceptionTransition!>!
+Rampart.ControlFlow.CompiledExceptionLeaf.Transitions.init -> void
+Rampart.ControlFlow.ImageExceptionTransition
+Rampart.ControlFlow.ImageExceptionTransition.<Clone>$() -> Rampart.ControlFlow.ImageExceptionTransition!
+Rampart.ControlFlow.ImageExceptionTransition.Condition.get -> int
+Rampart.ControlFlow.ImageExceptionTransition.Condition.init -> void
+Rampart.ControlFlow.ImageExceptionTransition.Deconstruct(out uint FaultRva, out uint TakenRva, out uint FallthroughRva, out int Condition) -> void
+Rampart.ControlFlow.ImageExceptionTransition.Equals(Rampart.ControlFlow.ImageExceptionTransition? other) -> bool
+Rampart.ControlFlow.ImageExceptionTransition.FallthroughRva.get -> uint
+Rampart.ControlFlow.ImageExceptionTransition.FallthroughRva.init -> void
+Rampart.ControlFlow.ImageExceptionTransition.FaultRva.get -> uint
+Rampart.ControlFlow.ImageExceptionTransition.FaultRva.init -> void
+Rampart.ControlFlow.ImageExceptionTransition.ImageExceptionTransition(uint FaultRva, uint TakenRva, uint FallthroughRva, int Condition) -> void
+Rampart.ControlFlow.ImageExceptionTransition.TakenRva.get -> uint
+Rampart.ControlFlow.ImageExceptionTransition.TakenRva.init -> void
+Rampart.ControlFlow.LeafControlFlowCompiler
+Rampart.ControlFlow.LeafExceptionDispatcher
+Rampart.ControlFlow.LeafExceptionTransition
+Rampart.ControlFlow.LeafExceptionTransition.<Clone>$() -> Rampart.ControlFlow.LeafExceptionTransition!
+Rampart.ControlFlow.LeafExceptionTransition.Condition.get -> int
+Rampart.ControlFlow.LeafExceptionTransition.Condition.init -> void
+Rampart.ControlFlow.LeafExceptionTransition.Deconstruct(out int FaultOffset, out int TakenOffset, out int FallthroughOffset, out int Condition) -> void
+Rampart.ControlFlow.LeafExceptionTransition.Equals(Rampart.ControlFlow.LeafExceptionTransition? other) -> bool
+Rampart.ControlFlow.LeafExceptionTransition.FallthroughOffset.get -> int
+Rampart.ControlFlow.LeafExceptionTransition.FallthroughOffset.init -> void
+Rampart.ControlFlow.LeafExceptionTransition.FaultOffset.get -> int
+Rampart.ControlFlow.LeafExceptionTransition.FaultOffset.init -> void
+Rampart.ControlFlow.LeafExceptionTransition.LeafExceptionTransition(int FaultOffset, int TakenOffset, int FallthroughOffset, int Condition) -> void
+Rampart.ControlFlow.LeafExceptionTransition.TakenOffset.get -> int
+Rampart.ControlFlow.LeafExceptionTransition.TakenOffset.init -> void
+Rampart.ControlFlow.LeafFunctionEligibility
+Rampart.Engine.BuildContext
+Rampart.Engine.BuildContext.Alloc(int size, int alignment = 1) -> uint
+Rampart.Engine.BuildContext.AllocData(int size, int alignment = 1) -> uint
+Rampart.Engine.BuildContext.AllocPointerSlot() -> uint
+Rampart.Engine.BuildContext.Analyze() -> void
+Rampart.Engine.BuildContext.Applied.get -> System.Collections.Generic.IReadOnlyDictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Engine.BuildContext.BuildContext(Rampart.Pe.PeImage! pe, Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, System.Collections.Generic.IReadOnlyList<Rampart.Symbols.SymbolRecord!>? symbols = null) -> void
+Rampart.Engine.BuildContext.Catalog.get -> Rampart.Config.KnobCatalog!
+Rampart.Engine.BuildContext.Data.get -> Rampart.Pe.PeImage.Section?
+Rampart.Engine.BuildContext.DataRva.get -> uint
+Rampart.Engine.BuildContext.EnsureDataSection() -> Rampart.Pe.PeImage.Section!
+Rampart.Engine.BuildContext.EnsureStubSection() -> Rampart.Pe.PeImage.Section!
+Rampart.Engine.BuildContext.FunctionPolicy.get -> Rampart.Engine.FunctionPolicy!
+Rampart.Engine.BuildContext.Functions.get -> System.Collections.Generic.List<Rampart.Engine.FunctionDescriptor!>!
+Rampart.Engine.BuildContext.FunctionTransformations.get -> System.Collections.Generic.IReadOnlyDictionary<uint, Rampart.Engine.FunctionTransformation!>!
+Rampart.Engine.BuildContext.InitChain.get -> System.Collections.Generic.List<uint>!
+Rampart.Engine.BuildContext.IsFunctionClaimed(Rampart.Engine.FunctionDescriptor! function) -> bool
+Rampart.Engine.BuildContext.Level(string! knobId) -> Rampart.Config.ProtectionLevel
+Rampart.Engine.BuildContext.LevelFor(string! knobId, Rampart.Engine.FunctionDescriptor! function) -> Rampart.Config.ProtectionLevel
+Rampart.Engine.BuildContext.Log.get -> System.Collections.Generic.List<Rampart.Engine.BuildLogEntry!>!
+Rampart.Engine.BuildContext.MarkApplied(string! knobId) -> void
+Rampart.Engine.BuildContext.MarkApplied(string! knobId, Rampart.Config.ProtectionLevel level) -> void
+Rampart.Engine.BuildContext.MaximumFunctionLevel(string! knobId) -> Rampart.Config.ProtectionLevel
+Rampart.Engine.BuildContext.Pe.get -> Rampart.Pe.PeImage!
+Rampart.Engine.BuildContext.RegisterInit(uint rva, string! what) -> void
+Rampart.Engine.BuildContext.RelocSlots.get -> System.Collections.Generic.List<uint>!
+Rampart.Engine.BuildContext.Rng.get -> System.Random!
+Rampart.Engine.BuildContext.Settings.get -> Rampart.Config.ProtectionSettings!
+Rampart.Engine.BuildContext.Stub.get -> Rampart.Pe.PeImage.Section?
+Rampart.Engine.BuildContext.StubRva.get -> uint
+Rampart.Engine.BuildContext.Symbols.get -> System.Collections.Generic.IReadOnlyList<Rampart.Symbols.SymbolRecord!>!
+Rampart.Engine.BuildContext.TryClaimFunction(Rampart.Engine.FunctionDescriptor! function, string! pass, uint protectedRva, uint protectedSize) -> bool
+Rampart.Engine.BuildContext.WriteData(uint rva, System.ReadOnlySpan<byte> data) -> void
+Rampart.Engine.BuildContext.WriteStub(uint rva, System.ReadOnlySpan<byte> data) -> void
+Rampart.Engine.BuildLogEntry
+Rampart.Engine.BuildLogEntry.<Clone>$() -> Rampart.Engine.BuildLogEntry!
+Rampart.Engine.BuildLogEntry.BuildLogEntry(string! Pass, string! Detail) -> void
+Rampart.Engine.BuildLogEntry.Deconstruct(out string! Pass, out string! Detail) -> void
+Rampart.Engine.BuildLogEntry.Detail.get -> string!
+Rampart.Engine.BuildLogEntry.Detail.init -> void
+Rampart.Engine.BuildLogEntry.Equals(Rampart.Engine.BuildLogEntry? other) -> bool
+Rampart.Engine.BuildLogEntry.Pass.get -> string!
+Rampart.Engine.BuildLogEntry.Pass.init -> void
+Rampart.Engine.FunctionDescriptor
+Rampart.Engine.FunctionDescriptor.<Clone>$() -> Rampart.Engine.FunctionDescriptor!
+Rampart.Engine.FunctionDescriptor.BeginRva.get -> uint
+Rampart.Engine.FunctionDescriptor.BeginRva.init -> void
+Rampart.Engine.FunctionDescriptor.Deconstruct(out uint BeginRva, out uint EndRva, out uint UnwindRva, out string! Name, out string! Namespace, out string? Module, out string! Section, out string? Source) -> void
+Rampart.Engine.FunctionDescriptor.EndRva.get -> uint
+Rampart.Engine.FunctionDescriptor.EndRva.init -> void
+Rampart.Engine.FunctionDescriptor.Equals(Rampart.Engine.FunctionDescriptor? other) -> bool
+Rampart.Engine.FunctionDescriptor.FunctionDescriptor(uint BeginRva, uint EndRva, uint UnwindRva, string! Name, string! Namespace, string? Module, string! Section, string? Source) -> void
+Rampart.Engine.FunctionDescriptor.Module.get -> string?
+Rampart.Engine.FunctionDescriptor.Module.init -> void
+Rampart.Engine.FunctionDescriptor.Name.get -> string!
+Rampart.Engine.FunctionDescriptor.Name.init -> void
+Rampart.Engine.FunctionDescriptor.Namespace.get -> string!
+Rampart.Engine.FunctionDescriptor.Namespace.init -> void
+Rampart.Engine.FunctionDescriptor.Section.get -> string!
+Rampart.Engine.FunctionDescriptor.Section.init -> void
+Rampart.Engine.FunctionDescriptor.Size.get -> uint
+Rampart.Engine.FunctionDescriptor.Source.get -> string?
+Rampart.Engine.FunctionDescriptor.Source.init -> void
+Rampart.Engine.FunctionDescriptor.UnwindRva.get -> uint
+Rampart.Engine.FunctionDescriptor.UnwindRva.init -> void
+Rampart.Engine.FunctionPolicy
+Rampart.Engine.FunctionPolicy.EffectiveLevels(Rampart.Engine.FunctionDescriptor! function) -> System.Collections.Generic.IReadOnlyDictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Engine.FunctionPolicy.FunctionPolicy(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog) -> void
+Rampart.Engine.FunctionPolicy.HasExplicitSelection(string! knobId, Rampart.Engine.FunctionDescriptor! function) -> bool
+Rampart.Engine.FunctionPolicy.IsSelected(Rampart.Engine.FunctionDescriptor! function) -> bool
+Rampart.Engine.FunctionPolicy.Level(string! knobId, Rampart.Engine.FunctionDescriptor! function) -> Rampart.Config.ProtectionLevel
+Rampart.Engine.FunctionPolicy.MaximumLevel(string! knobId, System.Collections.Generic.IEnumerable<Rampart.Engine.FunctionDescriptor!>! functions) -> Rampart.Config.ProtectionLevel
+Rampart.Engine.FunctionTransformation
+Rampart.Engine.FunctionTransformation.<Clone>$() -> Rampart.Engine.FunctionTransformation!
+Rampart.Engine.FunctionTransformation.Deconstruct(out uint OriginalRva, out uint ProtectedRva, out uint ProtectedSize, out string! Pass) -> void
+Rampart.Engine.FunctionTransformation.Equals(Rampart.Engine.FunctionTransformation? other) -> bool
+Rampart.Engine.FunctionTransformation.FunctionTransformation(uint OriginalRva, uint ProtectedRva, uint ProtectedSize, string! Pass) -> void
+Rampart.Engine.FunctionTransformation.OriginalRva.get -> uint
+Rampart.Engine.FunctionTransformation.OriginalRva.init -> void
+Rampart.Engine.FunctionTransformation.Pass.get -> string!
+Rampart.Engine.FunctionTransformation.Pass.init -> void
+Rampart.Engine.FunctionTransformation.ProtectedRva.get -> uint
+Rampart.Engine.FunctionTransformation.ProtectedRva.init -> void
+Rampart.Engine.FunctionTransformation.ProtectedSize.get -> uint
+Rampart.Engine.FunctionTransformation.ProtectedSize.init -> void
+Rampart.Engine.GuardCfBuilder
+Rampart.Engine.Passes.AntiDebugPass
+Rampart.Engine.Passes.AntiDebugPass.AntiDebugPass() -> void
+Rampart.Engine.Passes.AntiDebugPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.AntiSandboxPass
+Rampart.Engine.Passes.AntiSandboxPass.AntiSandboxPass() -> void
+Rampart.Engine.Passes.AntiSandboxPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.ApiConcealmentPass
+Rampart.Engine.Passes.ApiConcealmentPass.ApiConcealmentPass() -> void
+Rampart.Engine.Passes.ApiConcealmentPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.CodeTransformPass
+Rampart.Engine.Passes.CodeTransformPass.CodeTransformPass() -> void
+Rampart.Engine.Passes.CodeTransformPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.ControlFlowFlatteningPass
+Rampart.Engine.Passes.ControlFlowFlatteningPass.ControlFlowFlatteningPass() -> void
+Rampart.Engine.Passes.ControlFlowFlatteningPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.EntryPointPass
+Rampart.Engine.Passes.EntryPointPass.EntryPointPass() -> void
+Rampart.Engine.Passes.EntryPointPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.ExceptionFlowPass
+Rampart.Engine.Passes.ExceptionFlowPass.ExceptionFlowPass() -> void
+Rampart.Engine.Passes.ExceptionFlowPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.GuardStubsPass
+Rampart.Engine.Passes.GuardStubsPass.GuardStubsPass() -> void
+Rampart.Engine.Passes.GuardStubsPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.HeaderDisguisePass
+Rampart.Engine.Passes.HeaderDisguisePass.HeaderDisguisePass() -> void
+Rampart.Engine.Passes.HeaderDisguisePass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.HexRaysDenialPass
+Rampart.Engine.Passes.HexRaysDenialPass.HexRaysDenialPass() -> void
+Rampart.Engine.Passes.HexRaysDenialPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.HiddenThreadsPass
+Rampart.Engine.Passes.HiddenThreadsPass.HiddenThreadsPass() -> void
+Rampart.Engine.Passes.HiddenThreadsPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.IdaBombPass
+Rampart.Engine.Passes.IdaBombPass.IdaBombPass() -> void
+Rampart.Engine.Passes.IdaBombPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.ImportConcealmentPass
+Rampart.Engine.Passes.ImportConcealmentPass.ImportConcealmentPass() -> void
+Rampart.Engine.Passes.ImportConcealmentPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.InjectionHunterPass
+Rampart.Engine.Passes.InjectionHunterPass.InjectionHunterPass() -> void
+Rampart.Engine.Passes.InjectionHunterPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.RuntimeHardeningPass
+Rampart.Engine.Passes.RuntimeHardeningPass.RegisterAfterStringInitializers(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.RuntimeHardeningPass.RunAfterEntryPoint(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.RuntimeHardeningPass.RunBeforeEntryPoint(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.RuntimeHardeningPass.RuntimeHardeningPass() -> void
+Rampart.Engine.Passes.RuntimeHeaderProtectionPass
+Rampart.Engine.Passes.RuntimeHeaderProtectionPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.RuntimeHeaderProtectionPass.RuntimeHeaderProtectionPass() -> void
+Rampart.Engine.Passes.SectionPackingPass
+Rampart.Engine.Passes.SectionPackingPass.Prepare(Rampart.Engine.BuildContext! context) -> void
+Rampart.Engine.Passes.SectionPackingPass.Run(Rampart.Engine.BuildContext! context) -> void
+Rampart.Engine.Passes.SectionPackingPass.SectionPackingPass() -> void
+Rampart.Engine.Passes.StaticDecodeDenialPass
+Rampart.Engine.Passes.StaticDecodeDenialPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.StaticDecodeDenialPass.StaticDecodeDenialPass() -> void
+Rampart.Engine.Passes.StringProtectionPass
+Rampart.Engine.Passes.StringProtectionPass.Initializers.get -> System.Collections.Generic.IReadOnlyList<uint>!
+Rampart.Engine.Passes.StringProtectionPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.StringProtectionPass.StringProtectionPass() -> void
+Rampart.Engine.Passes.SymbolicDenialPass
+Rampart.Engine.Passes.SymbolicDenialPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.SymbolicDenialPass.SymbolicDenialPass() -> void
+Rampart.Engine.Passes.SymbolScrubPass
+Rampart.Engine.Passes.SymbolScrubPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.SymbolScrubPass.SymbolScrubPass() -> void
+Rampart.Engine.Passes.VirtualizationPass
+Rampart.Engine.Passes.VirtualizationPass.Run(Rampart.Engine.BuildContext! ctx) -> void
+Rampart.Engine.Passes.VirtualizationPass.VirtualizationPass() -> void
+Rampart.Engine.PeCompatibility
+Rampart.Engine.PeCompatibilityFeatures
+Rampart.Engine.PeCompatibilityFeatures.<Clone>$() -> Rampart.Engine.PeCompatibilityFeatures!
+Rampart.Engine.PeCompatibilityFeatures.BoundImportDescriptors.get -> int
+Rampart.Engine.PeCompatibilityFeatures.BoundImportDescriptors.init -> void
+Rampart.Engine.PeCompatibilityFeatures.CetContinuationMetadata.get -> bool
+Rampart.Engine.PeCompatibilityFeatures.CetContinuationMetadata.init -> void
+Rampart.Engine.PeCompatibilityFeatures.Deconstruct(out int DelayImportDescriptors, out int BoundImportDescriptors, out uint LoadConfigSize, out Rampart.Pe.ImageGuardFlags GuardFlags, out bool GuardCf, out bool CetContinuationMetadata, out int TlsCallbacks, out uint FileAlignment, out uint SectionAlignment, out int OverlayBytes) -> void
+Rampart.Engine.PeCompatibilityFeatures.DelayImportDescriptors.get -> int
+Rampart.Engine.PeCompatibilityFeatures.DelayImportDescriptors.init -> void
+Rampart.Engine.PeCompatibilityFeatures.Equals(Rampart.Engine.PeCompatibilityFeatures? other) -> bool
+Rampart.Engine.PeCompatibilityFeatures.FileAlignment.get -> uint
+Rampart.Engine.PeCompatibilityFeatures.FileAlignment.init -> void
+Rampart.Engine.PeCompatibilityFeatures.GuardCf.get -> bool
+Rampart.Engine.PeCompatibilityFeatures.GuardCf.init -> void
+Rampart.Engine.PeCompatibilityFeatures.GuardFlags.get -> Rampart.Pe.ImageGuardFlags
+Rampart.Engine.PeCompatibilityFeatures.GuardFlags.init -> void
+Rampart.Engine.PeCompatibilityFeatures.LoadConfigSize.get -> uint
+Rampart.Engine.PeCompatibilityFeatures.LoadConfigSize.init -> void
+Rampart.Engine.PeCompatibilityFeatures.OverlayBytes.get -> int
+Rampart.Engine.PeCompatibilityFeatures.OverlayBytes.init -> void
+Rampart.Engine.PeCompatibilityFeatures.PeCompatibilityFeatures(int DelayImportDescriptors, int BoundImportDescriptors, uint LoadConfigSize, Rampart.Pe.ImageGuardFlags GuardFlags, bool GuardCf, bool CetContinuationMetadata, int TlsCallbacks, uint FileAlignment, uint SectionAlignment, int OverlayBytes) -> void
+Rampart.Engine.PeCompatibilityFeatures.SectionAlignment.get -> uint
+Rampart.Engine.PeCompatibilityFeatures.SectionAlignment.init -> void
+Rampart.Engine.PeCompatibilityFeatures.Summary.get -> string!
+Rampart.Engine.PeCompatibilityFeatures.TlsCallbacks.get -> int
+Rampart.Engine.PeCompatibilityFeatures.TlsCallbacks.init -> void
+Rampart.Engine.ProtectedSymbolMap
+Rampart.Engine.ProtectedSymbolMap.Functions.get -> System.Collections.Generic.List<Rampart.Engine.ProtectedSymbolMapEntry!>!
+Rampart.Engine.ProtectedSymbolMap.Functions.init -> void
+Rampart.Engine.ProtectedSymbolMap.ImageBase.get -> ulong
+Rampart.Engine.ProtectedSymbolMap.ImageBase.init -> void
+Rampart.Engine.ProtectedSymbolMap.InputSha256.get -> string!
+Rampart.Engine.ProtectedSymbolMap.InputSha256.init -> void
+Rampart.Engine.ProtectedSymbolMap.OutputSha256.get -> string!
+Rampart.Engine.ProtectedSymbolMap.OutputSha256.init -> void
+Rampart.Engine.ProtectedSymbolMap.ProtectedSymbolMap() -> void
+Rampart.Engine.ProtectedSymbolMap.SchemaVersion.get -> int
+Rampart.Engine.ProtectedSymbolMap.SchemaVersion.init -> void
+Rampart.Engine.ProtectedSymbolMap.Seed.get -> long
+Rampart.Engine.ProtectedSymbolMap.Seed.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry
+Rampart.Engine.ProtectedSymbolMapEntry.Applied.get -> System.Collections.Generic.IReadOnlyDictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Engine.ProtectedSymbolMapEntry.Applied.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Module.get -> string?
+Rampart.Engine.ProtectedSymbolMapEntry.Module.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Name.get -> string!
+Rampart.Engine.ProtectedSymbolMapEntry.Name.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Namespace.get -> string?
+Rampart.Engine.ProtectedSymbolMapEntry.Namespace.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.OriginalRva.get -> uint
+Rampart.Engine.ProtectedSymbolMapEntry.OriginalRva.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.ProtectedRva.get -> uint
+Rampart.Engine.ProtectedSymbolMapEntry.ProtectedRva.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.ProtectedSize.get -> uint?
+Rampart.Engine.ProtectedSymbolMapEntry.ProtectedSize.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.ProtectedSymbolMapEntry() -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Requested.get -> System.Collections.Generic.IReadOnlyDictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Engine.ProtectedSymbolMapEntry.Requested.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Section.get -> string?
+Rampart.Engine.ProtectedSymbolMapEntry.Section.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Size.get -> uint
+Rampart.Engine.ProtectedSymbolMapEntry.Size.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Source.get -> string?
+Rampart.Engine.ProtectedSymbolMapEntry.Source.init -> void
+Rampart.Engine.ProtectedSymbolMapEntry.Transformation.get -> string?
+Rampart.Engine.ProtectedSymbolMapEntry.Transformation.init -> void
+Rampart.Engine.ProtectionResult
+Rampart.Engine.ProtectionResult.Applied.get -> System.Collections.Generic.Dictionary<string!, Rampart.Config.ProtectionLevel>!
+Rampart.Engine.ProtectionResult.Applied.init -> void
+Rampart.Engine.ProtectionResult.BudgetPoints.get -> int
+Rampart.Engine.ProtectionResult.BudgetPoints.init -> void
+Rampart.Engine.ProtectionResult.Concerns.get -> System.Collections.Generic.List<Rampart.Config.Concern!>!
+Rampart.Engine.ProtectionResult.Concerns.init -> void
+Rampart.Engine.ProtectionResult.InputSha256.get -> string!
+Rampart.Engine.ProtectionResult.InputSha256.init -> void
+Rampart.Engine.ProtectionResult.InputSize.get -> int
+Rampart.Engine.ProtectionResult.InputSize.init -> void
+Rampart.Engine.ProtectionResult.Log.get -> System.Collections.Generic.List<Rampart.Engine.BuildLogEntry!>!
+Rampart.Engine.ProtectionResult.Log.init -> void
+Rampart.Engine.ProtectionResult.Output.get -> byte[]!
+Rampart.Engine.ProtectionResult.Output.init -> void
+Rampart.Engine.ProtectionResult.OutputSha256.get -> string!
+Rampart.Engine.ProtectionResult.OutputSha256.init -> void
+Rampart.Engine.ProtectionResult.OutputSize.get -> int
+Rampart.Engine.ProtectionResult.OutputSize.init -> void
+Rampart.Engine.ProtectionResult.ProtectionResult() -> void
+Rampart.Engine.ProtectionResult.Seed.get -> long
+Rampart.Engine.ProtectionResult.Seed.init -> void
+Rampart.Engine.ProtectionResult.SymbolMap.get -> Rampart.Engine.ProtectedSymbolMap!
+Rampart.Engine.ProtectionResult.SymbolMap.init -> void
+Rampart.Engine.Protector
+Rampart.Engine.Protector.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog? catalog = null, System.Collections.Generic.IReadOnlyList<Rampart.Symbols.SymbolRecord!>? symbols = null) -> Rampart.Engine.ProtectionResult!
+Rampart.Engine.Protector.Protector() -> void
+Rampart.Engine.RelocBuilder
+Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.CodeModified = 1 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.DebuggerObserved = 16 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.ForeignModuleObserved = 64 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.IatModified = 2 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.MitigationRejected = 8 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.None = 0 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.SandboxObserved = 32 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.SentinelModified = 128 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionKind.TlsOwnershipLost = 4 -> Rampart.Engine.RuntimeDetectionKind
+Rampart.Engine.RuntimeDetectionState
+Rampart.Engine.RuntimeDetectionStateLayout
+Rampart.Engine.RuntimeDetectionStateLayout.<Clone>$() -> Rampart.Engine.RuntimeDetectionStateLayout!
+Rampart.Engine.RuntimeDetectionStateLayout.Deconstruct(out uint Rva, out ulong InitialSessionKey) -> void
+Rampart.Engine.RuntimeDetectionStateLayout.Equals(Rampart.Engine.RuntimeDetectionStateLayout? other) -> bool
+Rampart.Engine.RuntimeDetectionStateLayout.InitialSessionKey.get -> ulong
+Rampart.Engine.RuntimeDetectionStateLayout.InitialSessionKey.init -> void
+Rampart.Engine.RuntimeDetectionStateLayout.RuntimeDetectionStateLayout(uint Rva, ulong InitialSessionKey) -> void
+Rampart.Engine.RuntimeDetectionStateLayout.Rva.get -> uint
+Rampart.Engine.RuntimeDetectionStateLayout.Rva.init -> void
+Rampart.Engine.TlsBuilder
+Rampart.Imports.ExportHashResolver
+Rampart.Managed.ManagedBackend
+Rampart.Managed.ManagedBackend.ManagedBackend() -> void
+Rampart.Managed.ManagedBackend.Protect(byte[]! input, Rampart.Config.ManagedProtectionOptions! options, long seed, byte[]? portablePdb = null) -> Rampart.Managed.ManagedProtectionResult!
+Rampart.Managed.ManagedCoverage
+Rampart.Managed.ManagedCoverage.<Clone>$() -> Rampart.Managed.ManagedCoverage!
+Rampart.Managed.ManagedCoverage.ChangedMethods.get -> int
+Rampart.Managed.ManagedCoverage.ChangedMethods.init -> void
+Rampart.Managed.ManagedCoverage.ChangedOriginalIlBytes.get -> long
+Rampart.Managed.ManagedCoverage.ChangedOriginalIlBytes.init -> void
+Rampart.Managed.ManagedCoverage.Deconstruct(out int Methods, out int MethodsWithIl, out int ChangedMethods, out long OriginalIlBytes, out long ChangedOriginalIlBytes, out int RenamedTypes, out int RenamedFields, out System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedProtectionCoverage!>! Protections) -> void
+Rampart.Managed.ManagedCoverage.Equals(Rampart.Managed.ManagedCoverage? other) -> bool
+Rampart.Managed.ManagedCoverage.ManagedCoverage(int Methods, int MethodsWithIl, int ChangedMethods, long OriginalIlBytes, long ChangedOriginalIlBytes, int RenamedTypes, int RenamedFields, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedProtectionCoverage!>! Protections) -> void
+Rampart.Managed.ManagedCoverage.Methods.get -> int
+Rampart.Managed.ManagedCoverage.Methods.init -> void
+Rampart.Managed.ManagedCoverage.MethodsWithIl.get -> int
+Rampart.Managed.ManagedCoverage.MethodsWithIl.init -> void
+Rampart.Managed.ManagedCoverage.OriginalIlBytes.get -> long
+Rampart.Managed.ManagedCoverage.OriginalIlBytes.init -> void
+Rampart.Managed.ManagedCoverage.Protections.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedProtectionCoverage!>!
+Rampart.Managed.ManagedCoverage.Protections.init -> void
+Rampart.Managed.ManagedCoverage.RenamedFields.get -> int
+Rampart.Managed.ManagedCoverage.RenamedFields.init -> void
+Rampart.Managed.ManagedCoverage.RenamedTypes.get -> int
+Rampart.Managed.ManagedCoverage.RenamedTypes.init -> void
+Rampart.Managed.ManagedCoverageReason
+Rampart.Managed.ManagedCoverageReason.<Clone>$() -> Rampart.Managed.ManagedCoverageReason!
+Rampart.Managed.ManagedCoverageReason.Deconstruct(out string! Reason, out int Methods) -> void
+Rampart.Managed.ManagedCoverageReason.Equals(Rampart.Managed.ManagedCoverageReason? other) -> bool
+Rampart.Managed.ManagedCoverageReason.ManagedCoverageReason(string! Reason, int Methods) -> void
+Rampart.Managed.ManagedCoverageReason.Methods.get -> int
+Rampart.Managed.ManagedCoverageReason.Methods.init -> void
+Rampart.Managed.ManagedCoverageReason.Reason.get -> string!
+Rampart.Managed.ManagedCoverageReason.Reason.init -> void
+Rampart.Managed.ManagedFrameworkBinding
+Rampart.Managed.ManagedFrameworkBinding.<Clone>$() -> Rampart.Managed.ManagedFrameworkBinding!
+Rampart.Managed.ManagedFrameworkBinding.Deconstruct(out string! RequestedIdentity, out string! ResolvedIdentity) -> void
+Rampart.Managed.ManagedFrameworkBinding.Equals(Rampart.Managed.ManagedFrameworkBinding? other) -> bool
+Rampart.Managed.ManagedFrameworkBinding.ManagedFrameworkBinding(string! RequestedIdentity, string! ResolvedIdentity) -> void
+Rampart.Managed.ManagedFrameworkBinding.RequestedIdentity.get -> string!
+Rampart.Managed.ManagedFrameworkBinding.RequestedIdentity.init -> void
+Rampart.Managed.ManagedFrameworkBinding.ResolvedIdentity.get -> string!
+Rampart.Managed.ManagedFrameworkBinding.ResolvedIdentity.init -> void
+Rampart.Managed.ManagedMethodEvidence
+Rampart.Managed.ManagedMethodEvidence.<Clone>$() -> Rampart.Managed.ManagedMethodEvidence!
+Rampart.Managed.ManagedMethodEvidence.Applied.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Managed.ManagedMethodEvidence.Applied.init -> void
+Rampart.Managed.ManagedMethodEvidence.Deconstruct(out Rampart.Managed.ManagedMethodIdentity! Original, out int ProtectedToken, out string! ProtectedName, out string! OriginalHash, out string! ProtectedHash, out string? TransformationOwner, out System.Collections.Generic.IReadOnlyList<string!>! Applied, out System.Collections.Generic.IReadOnlyList<string!>! Skipped) -> void
+Rampart.Managed.ManagedMethodEvidence.Equals(Rampart.Managed.ManagedMethodEvidence? other) -> bool
+Rampart.Managed.ManagedMethodEvidence.ManagedMethodEvidence(Rampart.Managed.ManagedMethodIdentity! Original, int ProtectedToken, string! ProtectedName, string! OriginalHash, string! ProtectedHash, string? TransformationOwner, System.Collections.Generic.IReadOnlyList<string!>! Applied, System.Collections.Generic.IReadOnlyList<string!>! Skipped) -> void
+Rampart.Managed.ManagedMethodEvidence.Original.get -> Rampart.Managed.ManagedMethodIdentity!
+Rampart.Managed.ManagedMethodEvidence.Original.init -> void
+Rampart.Managed.ManagedMethodEvidence.OriginalHash.get -> string!
+Rampart.Managed.ManagedMethodEvidence.OriginalHash.init -> void
+Rampart.Managed.ManagedMethodEvidence.OriginalIlSize.get -> int
+Rampart.Managed.ManagedMethodEvidence.OriginalIlSize.init -> void
+Rampart.Managed.ManagedMethodEvidence.ProtectedHash.get -> string!
+Rampart.Managed.ManagedMethodEvidence.ProtectedHash.init -> void
+Rampart.Managed.ManagedMethodEvidence.ProtectedIlSize.get -> int
+Rampart.Managed.ManagedMethodEvidence.ProtectedIlSize.init -> void
+Rampart.Managed.ManagedMethodEvidence.ProtectedName.get -> string!
+Rampart.Managed.ManagedMethodEvidence.ProtectedName.init -> void
+Rampart.Managed.ManagedMethodEvidence.ProtectedToken.get -> int
+Rampart.Managed.ManagedMethodEvidence.ProtectedToken.init -> void
+Rampart.Managed.ManagedMethodEvidence.Rejected.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Managed.ManagedMethodEvidence.Rejected.init -> void
+Rampart.Managed.ManagedMethodEvidence.Requested.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Managed.ManagedMethodEvidence.Requested.init -> void
+Rampart.Managed.ManagedMethodEvidence.SequencePoints.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedSequencePointMapping!>!
+Rampart.Managed.ManagedMethodEvidence.SequencePoints.init -> void
+Rampart.Managed.ManagedMethodEvidence.Sites.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedSiteEvidence!>!
+Rampart.Managed.ManagedMethodEvidence.Sites.init -> void
+Rampart.Managed.ManagedMethodEvidence.Skipped.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Managed.ManagedMethodEvidence.Skipped.init -> void
+Rampart.Managed.ManagedMethodEvidence.TransformationOwner.get -> string?
+Rampart.Managed.ManagedMethodEvidence.TransformationOwner.init -> void
+Rampart.Managed.ManagedMethodEvidence.VerificationStatus.get -> string!
+Rampart.Managed.ManagedMethodEvidence.VerificationStatus.init -> void
+Rampart.Managed.ManagedMethodIdentity
+Rampart.Managed.ManagedMethodIdentity.<Clone>$() -> Rampart.Managed.ManagedMethodIdentity!
+Rampart.Managed.ManagedMethodIdentity.Assembly.get -> string!
+Rampart.Managed.ManagedMethodIdentity.Assembly.init -> void
+Rampart.Managed.ManagedMethodIdentity.Deconstruct(out string! StableId, out string! Assembly, out string! Module, out string! Namespace, out string! Type, out string! Method, out string! Signature, out int MetadataToken, out string? SourceDocument, out bool GeneratedCode) -> void
+Rampart.Managed.ManagedMethodIdentity.Equals(Rampart.Managed.ManagedMethodIdentity? other) -> bool
+Rampart.Managed.ManagedMethodIdentity.GeneratedCode.get -> bool
+Rampart.Managed.ManagedMethodIdentity.GeneratedCode.init -> void
+Rampart.Managed.ManagedMethodIdentity.ManagedMethodIdentity(string! StableId, string! Assembly, string! Module, string! Namespace, string! Type, string! Method, string! Signature, int MetadataToken, string? SourceDocument, bool GeneratedCode) -> void
+Rampart.Managed.ManagedMethodIdentity.MetadataToken.get -> int
+Rampart.Managed.ManagedMethodIdentity.MetadataToken.init -> void
+Rampart.Managed.ManagedMethodIdentity.Method.get -> string!
+Rampart.Managed.ManagedMethodIdentity.Method.init -> void
+Rampart.Managed.ManagedMethodIdentity.Module.get -> string!
+Rampart.Managed.ManagedMethodIdentity.Module.init -> void
+Rampart.Managed.ManagedMethodIdentity.Namespace.get -> string!
+Rampart.Managed.ManagedMethodIdentity.Namespace.init -> void
+Rampart.Managed.ManagedMethodIdentity.Signature.get -> string!
+Rampart.Managed.ManagedMethodIdentity.Signature.init -> void
+Rampart.Managed.ManagedMethodIdentity.SourceDocument.get -> string?
+Rampart.Managed.ManagedMethodIdentity.SourceDocument.init -> void
+Rampart.Managed.ManagedMethodIdentity.StableId.get -> string!
+Rampart.Managed.ManagedMethodIdentity.StableId.init -> void
+Rampart.Managed.ManagedMethodIdentity.Type.get -> string!
+Rampart.Managed.ManagedMethodIdentity.Type.init -> void
+Rampart.Managed.ManagedProtectionCoverage
+Rampart.Managed.ManagedProtectionCoverage.<Clone>$() -> Rampart.Managed.ManagedProtectionCoverage!
+Rampart.Managed.ManagedProtectionCoverage.AppliedSites.get -> int
+Rampart.Managed.ManagedProtectionCoverage.AppliedSites.init -> void
+Rampart.Managed.ManagedProtectionCoverage.Deconstruct(out string! Protection, out int MethodsRequested, out int MethodsApplied, out int MethodsSkipped, out int MethodsRejected, out long OriginalIlBytesRequested, out long OriginalIlBytesApplied, out int TotalSites, out int RequestedSites, out int AppliedSites, out int SkippedSites, out int RejectedSites, out System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedCoverageReason!>! SkipReasons) -> void
+Rampart.Managed.ManagedProtectionCoverage.Equals(Rampart.Managed.ManagedProtectionCoverage? other) -> bool
+Rampart.Managed.ManagedProtectionCoverage.ManagedProtectionCoverage(string! Protection, int MethodsRequested, int MethodsApplied, int MethodsSkipped, int MethodsRejected, long OriginalIlBytesRequested, long OriginalIlBytesApplied, int TotalSites, int RequestedSites, int AppliedSites, int SkippedSites, int RejectedSites, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedCoverageReason!>! SkipReasons) -> void
+Rampart.Managed.ManagedProtectionCoverage.MethodsApplied.get -> int
+Rampart.Managed.ManagedProtectionCoverage.MethodsApplied.init -> void
+Rampart.Managed.ManagedProtectionCoverage.MethodsRejected.get -> int
+Rampart.Managed.ManagedProtectionCoverage.MethodsRejected.init -> void
+Rampart.Managed.ManagedProtectionCoverage.MethodsRequested.get -> int
+Rampart.Managed.ManagedProtectionCoverage.MethodsRequested.init -> void
+Rampart.Managed.ManagedProtectionCoverage.MethodsSkipped.get -> int
+Rampart.Managed.ManagedProtectionCoverage.MethodsSkipped.init -> void
+Rampart.Managed.ManagedProtectionCoverage.OriginalIlBytesApplied.get -> long
+Rampart.Managed.ManagedProtectionCoverage.OriginalIlBytesApplied.init -> void
+Rampart.Managed.ManagedProtectionCoverage.OriginalIlBytesRequested.get -> long
+Rampart.Managed.ManagedProtectionCoverage.OriginalIlBytesRequested.init -> void
+Rampart.Managed.ManagedProtectionCoverage.Protection.get -> string!
+Rampart.Managed.ManagedProtectionCoverage.Protection.init -> void
+Rampart.Managed.ManagedProtectionCoverage.RejectedSites.get -> int
+Rampart.Managed.ManagedProtectionCoverage.RejectedSites.init -> void
+Rampart.Managed.ManagedProtectionCoverage.RequestedSites.get -> int
+Rampart.Managed.ManagedProtectionCoverage.RequestedSites.init -> void
+Rampart.Managed.ManagedProtectionCoverage.SiteSkipReasons.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedSiteCoverageReason!>!
+Rampart.Managed.ManagedProtectionCoverage.SiteSkipReasons.init -> void
+Rampart.Managed.ManagedProtectionCoverage.SkippedSites.get -> int
+Rampart.Managed.ManagedProtectionCoverage.SkippedSites.init -> void
+Rampart.Managed.ManagedProtectionCoverage.SkipReasons.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedCoverageReason!>!
+Rampart.Managed.ManagedProtectionCoverage.SkipReasons.init -> void
+Rampart.Managed.ManagedProtectionCoverage.TotalSites.get -> int
+Rampart.Managed.ManagedProtectionCoverage.TotalSites.init -> void
+Rampart.Managed.ManagedProtectionException
+Rampart.Managed.ManagedProtectionException.ManagedProtectionException(string! reasonCode, string! message) -> void
+Rampart.Managed.ManagedProtectionException.ManagedProtectionException(string! reasonCode, string! message, System.Exception! innerException) -> void
+Rampart.Managed.ManagedProtectionException.ReasonCode.get -> string!
+Rampart.Managed.ManagedProtectionResult
+Rampart.Managed.ManagedProtectionResult.<Clone>$() -> Rampart.Managed.ManagedProtectionResult!
+Rampart.Managed.ManagedProtectionResult.Coverage.get -> Rampart.Managed.ManagedCoverage!
+Rampart.Managed.ManagedProtectionResult.Deconstruct(out byte[]! Output, out byte[]? PdbOutput, out System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedMethodEvidence!>! Evidence, out System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedTokenMapping!>! TokenMap, out string! InputSha256, out string! OutputSha256, out System.Collections.Generic.IReadOnlyList<string!>! Diagnostics) -> void
+Rampart.Managed.ManagedProtectionResult.Diagnostics.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Managed.ManagedProtectionResult.Diagnostics.init -> void
+Rampart.Managed.ManagedProtectionResult.Equals(Rampart.Managed.ManagedProtectionResult? other) -> bool
+Rampart.Managed.ManagedProtectionResult.Evidence.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedMethodEvidence!>!
+Rampart.Managed.ManagedProtectionResult.Evidence.init -> void
+Rampart.Managed.ManagedProtectionResult.IdentifierRenames.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedRenameEvidence!>!
+Rampart.Managed.ManagedProtectionResult.IdentifierRenames.init -> void
+Rampart.Managed.ManagedProtectionResult.InputSha256.get -> string!
+Rampart.Managed.ManagedProtectionResult.InputSha256.init -> void
+Rampart.Managed.ManagedProtectionResult.ManagedProtectionResult(byte[]! Output, byte[]? PdbOutput, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedMethodEvidence!>! Evidence, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedTokenMapping!>! TokenMap, string! InputSha256, string! OutputSha256, System.Collections.Generic.IReadOnlyList<string!>! Diagnostics) -> void
+Rampart.Managed.ManagedProtectionResult.Output.get -> byte[]!
+Rampart.Managed.ManagedProtectionResult.Output.init -> void
+Rampart.Managed.ManagedProtectionResult.OutputSha256.get -> string!
+Rampart.Managed.ManagedProtectionResult.OutputSha256.init -> void
+Rampart.Managed.ManagedProtectionResult.PdbOutput.get -> byte[]?
+Rampart.Managed.ManagedProtectionResult.PdbOutput.init -> void
+Rampart.Managed.ManagedProtectionResult.TokenMap.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedTokenMapping!>!
+Rampart.Managed.ManagedProtectionResult.TokenMap.init -> void
+Rampart.Managed.ManagedProtectionResult.Verification.get -> Rampart.Managed.ManagedVerificationReport?
+Rampart.Managed.ManagedProtectionResult.Verification.init -> void
+Rampart.Managed.ManagedRenameEvidence
+Rampart.Managed.ManagedRenameEvidence.<Clone>$() -> Rampart.Managed.ManagedRenameEvidence!
+Rampart.Managed.ManagedRenameEvidence.Deconstruct(out int OriginalToken, out int ProtectedToken, out string! OriginalName, out string! ProtectedName, out string! Kind, out string! Reason) -> void
+Rampart.Managed.ManagedRenameEvidence.Equals(Rampart.Managed.ManagedRenameEvidence? other) -> bool
+Rampart.Managed.ManagedRenameEvidence.Kind.get -> string!
+Rampart.Managed.ManagedRenameEvidence.Kind.init -> void
+Rampart.Managed.ManagedRenameEvidence.ManagedRenameEvidence(int OriginalToken, int ProtectedToken, string! OriginalName, string! ProtectedName, string! Kind, string! Reason) -> void
+Rampart.Managed.ManagedRenameEvidence.OriginalName.get -> string!
+Rampart.Managed.ManagedRenameEvidence.OriginalName.init -> void
+Rampart.Managed.ManagedRenameEvidence.OriginalToken.get -> int
+Rampart.Managed.ManagedRenameEvidence.OriginalToken.init -> void
+Rampart.Managed.ManagedRenameEvidence.ProtectedName.get -> string!
+Rampart.Managed.ManagedRenameEvidence.ProtectedName.init -> void
+Rampart.Managed.ManagedRenameEvidence.ProtectedToken.get -> int
+Rampart.Managed.ManagedRenameEvidence.ProtectedToken.init -> void
+Rampart.Managed.ManagedRenameEvidence.Reason.get -> string!
+Rampart.Managed.ManagedRenameEvidence.Reason.init -> void
+Rampart.Managed.ManagedSequencePointMapping
+Rampart.Managed.ManagedSequencePointMapping.<Clone>$() -> Rampart.Managed.ManagedSequencePointMapping!
+Rampart.Managed.ManagedSequencePointMapping.Deconstruct(out int OriginalMethodToken, out int ProtectedMethodToken, out int OriginalIlOffset, out int? ProtectedIlOffset, out string! OriginalDocument, out string? ProtectedDocument, out int StartLine, out int StartColumn, out int EndLine, out int EndColumn, out string! Status) -> void
+Rampart.Managed.ManagedSequencePointMapping.EndColumn.get -> int
+Rampart.Managed.ManagedSequencePointMapping.EndColumn.init -> void
+Rampart.Managed.ManagedSequencePointMapping.EndLine.get -> int
+Rampart.Managed.ManagedSequencePointMapping.EndLine.init -> void
+Rampart.Managed.ManagedSequencePointMapping.Equals(Rampart.Managed.ManagedSequencePointMapping? other) -> bool
+Rampart.Managed.ManagedSequencePointMapping.ManagedSequencePointMapping(int OriginalMethodToken, int ProtectedMethodToken, int OriginalIlOffset, int? ProtectedIlOffset, string! OriginalDocument, string? ProtectedDocument, int StartLine, int StartColumn, int EndLine, int EndColumn, string! Status) -> void
+Rampart.Managed.ManagedSequencePointMapping.OriginalDocument.get -> string!
+Rampart.Managed.ManagedSequencePointMapping.OriginalDocument.init -> void
+Rampart.Managed.ManagedSequencePointMapping.OriginalIlOffset.get -> int
+Rampart.Managed.ManagedSequencePointMapping.OriginalIlOffset.init -> void
+Rampart.Managed.ManagedSequencePointMapping.OriginalMethodToken.get -> int
+Rampart.Managed.ManagedSequencePointMapping.OriginalMethodToken.init -> void
+Rampart.Managed.ManagedSequencePointMapping.ProtectedDocument.get -> string?
+Rampart.Managed.ManagedSequencePointMapping.ProtectedDocument.init -> void
+Rampart.Managed.ManagedSequencePointMapping.ProtectedIlOffset.get -> int?
+Rampart.Managed.ManagedSequencePointMapping.ProtectedIlOffset.init -> void
+Rampart.Managed.ManagedSequencePointMapping.ProtectedMethodToken.get -> int
+Rampart.Managed.ManagedSequencePointMapping.ProtectedMethodToken.init -> void
+Rampart.Managed.ManagedSequencePointMapping.StartColumn.get -> int
+Rampart.Managed.ManagedSequencePointMapping.StartColumn.init -> void
+Rampart.Managed.ManagedSequencePointMapping.StartLine.get -> int
+Rampart.Managed.ManagedSequencePointMapping.StartLine.init -> void
+Rampart.Managed.ManagedSequencePointMapping.Status.get -> string!
+Rampart.Managed.ManagedSequencePointMapping.Status.init -> void
+Rampart.Managed.ManagedSiteCoverageReason
+Rampart.Managed.ManagedSiteCoverageReason.<Clone>$() -> Rampart.Managed.ManagedSiteCoverageReason!
+Rampart.Managed.ManagedSiteCoverageReason.Deconstruct(out string! Reason, out int Sites) -> void
+Rampart.Managed.ManagedSiteCoverageReason.Equals(Rampart.Managed.ManagedSiteCoverageReason? other) -> bool
+Rampart.Managed.ManagedSiteCoverageReason.ManagedSiteCoverageReason(string! Reason, int Sites) -> void
+Rampart.Managed.ManagedSiteCoverageReason.Reason.get -> string!
+Rampart.Managed.ManagedSiteCoverageReason.Reason.init -> void
+Rampart.Managed.ManagedSiteCoverageReason.Sites.get -> int
+Rampart.Managed.ManagedSiteCoverageReason.Sites.init -> void
+Rampart.Managed.ManagedSiteEvidence
+Rampart.Managed.ManagedSiteEvidence.<Clone>$() -> Rampart.Managed.ManagedSiteEvidence!
+Rampart.Managed.ManagedSiteEvidence.Deconstruct(out string! StableId, out int OriginalIlOffset, out string! Protection, out string! Status, out string? Reason) -> void
+Rampart.Managed.ManagedSiteEvidence.Equals(Rampart.Managed.ManagedSiteEvidence? other) -> bool
+Rampart.Managed.ManagedSiteEvidence.ManagedSiteEvidence(string! StableId, int OriginalIlOffset, string! Protection, string! Status, string? Reason) -> void
+Rampart.Managed.ManagedSiteEvidence.OriginalIlOffset.get -> int
+Rampart.Managed.ManagedSiteEvidence.OriginalIlOffset.init -> void
+Rampart.Managed.ManagedSiteEvidence.Protection.get -> string!
+Rampart.Managed.ManagedSiteEvidence.Protection.init -> void
+Rampart.Managed.ManagedSiteEvidence.Reason.get -> string?
+Rampart.Managed.ManagedSiteEvidence.Reason.init -> void
+Rampart.Managed.ManagedSiteEvidence.StableId.get -> string!
+Rampart.Managed.ManagedSiteEvidence.StableId.init -> void
+Rampart.Managed.ManagedSiteEvidence.Status.get -> string!
+Rampart.Managed.ManagedSiteEvidence.Status.init -> void
+Rampart.Managed.ManagedTokenMapping
+Rampart.Managed.ManagedTokenMapping.<Clone>$() -> Rampart.Managed.ManagedTokenMapping!
+Rampart.Managed.ManagedTokenMapping.Deconstruct(out int OriginalToken, out int ProtectedToken) -> void
+Rampart.Managed.ManagedTokenMapping.Equals(Rampart.Managed.ManagedTokenMapping? other) -> bool
+Rampart.Managed.ManagedTokenMapping.ManagedTokenMapping(int OriginalToken, int ProtectedToken) -> void
+Rampart.Managed.ManagedTokenMapping.OriginalToken.get -> int
+Rampart.Managed.ManagedTokenMapping.OriginalToken.init -> void
+Rampart.Managed.ManagedTokenMapping.ProtectedToken.get -> int
+Rampart.Managed.ManagedTokenMapping.ProtectedToken.init -> void
+Rampart.Managed.ManagedTokenMapping.Status.get -> string!
+Rampart.Managed.ManagedTokenMapping.Status.init -> void
+Rampart.Managed.ManagedVerification
+Rampart.Managed.ManagedVerificationReference
+Rampart.Managed.ManagedVerificationReference.<Clone>$() -> Rampart.Managed.ManagedVerificationReference!
+Rampart.Managed.ManagedVerificationReference.Deconstruct(out string! Identity, out string! Sha256) -> void
+Rampart.Managed.ManagedVerificationReference.Equals(Rampart.Managed.ManagedVerificationReference? other) -> bool
+Rampart.Managed.ManagedVerificationReference.Identity.get -> string!
+Rampart.Managed.ManagedVerificationReference.Identity.init -> void
+Rampart.Managed.ManagedVerificationReference.ManagedVerificationReference(string! Identity, string! Sha256) -> void
+Rampart.Managed.ManagedVerificationReference.Sha256.get -> string!
+Rampart.Managed.ManagedVerificationReference.Sha256.init -> void
+Rampart.Managed.ManagedVerificationReport
+Rampart.Managed.ManagedVerificationReport.<Clone>$() -> Rampart.Managed.ManagedVerificationReport!
+Rampart.Managed.ManagedVerificationReport.Deconstruct(out string! Engine, out string! Status, out string! SystemModule, out string! OutputSha256, out int VerifiedMethods, out int VerifiedTypes, out System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedVerificationReference!>! References, out System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedFrameworkBinding!>! FrameworkBindings) -> void
+Rampart.Managed.ManagedVerificationReport.Engine.get -> string!
+Rampart.Managed.ManagedVerificationReport.Engine.init -> void
+Rampart.Managed.ManagedVerificationReport.EngineSha256.get -> string?
+Rampart.Managed.ManagedVerificationReport.EngineSha256.init -> void
+Rampart.Managed.ManagedVerificationReport.Equals(Rampart.Managed.ManagedVerificationReport? other) -> bool
+Rampart.Managed.ManagedVerificationReport.FrameworkBindings.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedFrameworkBinding!>!
+Rampart.Managed.ManagedVerificationReport.FrameworkBindings.init -> void
+Rampart.Managed.ManagedVerificationReport.ManagedVerificationReport(string! Engine, string! Status, string! SystemModule, string! OutputSha256, int VerifiedMethods, int VerifiedTypes, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedVerificationReference!>! References, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedFrameworkBinding!>! FrameworkBindings) -> void
+Rampart.Managed.ManagedVerificationReport.OutputSha256.get -> string!
+Rampart.Managed.ManagedVerificationReport.OutputSha256.init -> void
+Rampart.Managed.ManagedVerificationReport.References.get -> System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedVerificationReference!>!
+Rampart.Managed.ManagedVerificationReport.References.init -> void
+Rampart.Managed.ManagedVerificationReport.Status.get -> string!
+Rampart.Managed.ManagedVerificationReport.Status.init -> void
+Rampart.Managed.ManagedVerificationReport.SystemModule.get -> string!
+Rampart.Managed.ManagedVerificationReport.SystemModule.init -> void
+Rampart.Managed.ManagedVerificationReport.VerifiedMethods.get -> int
+Rampart.Managed.ManagedVerificationReport.VerifiedMethods.init -> void
+Rampart.Managed.ManagedVerificationReport.VerifiedTypes.get -> int
+Rampart.Managed.ManagedVerificationReport.VerifiedTypes.init -> void
+Rampart.NativeAot.NativeAotBackend
+Rampart.NativeAot.NativeAotBackend.Audit(byte[]! input, Rampart.Config.ProtectionSettings! settings, Rampart.Config.NativeAotProtectionOptions? options = null) -> Rampart.NativeAot.NativeAotReport!
+Rampart.NativeAot.NativeAotBackend.NativeAotBackend() -> void
+Rampart.NativeAot.NativeAotBackend.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, Rampart.Config.NativeAotProtectionOptions? options = null) -> Rampart.NativeAot.NativeAotResult!
+Rampart.NativeAot.NativeAotBackend.Validate(byte[]! original, byte[]! output) -> void
+Rampart.NativeAot.NativeAotCompatibilityException
+Rampart.NativeAot.NativeAotCompatibilityException.NativeAotCompatibilityException(string! reasonCode, string! message) -> void
+Rampart.NativeAot.NativeAotCompatibilityException.ReasonCode.get -> string!
+Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotEvidenceStatus.Applied = 2 -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotEvidenceStatus.Disabled = 0 -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotEvidenceStatus.Downgraded = 4 -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotEvidenceStatus.Planned = 1 -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotEvidenceStatus.Rejected = 5 -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotEvidenceStatus.Skipped = 3 -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotInvariantEvidence
+Rampart.NativeAot.NativeAotInvariantEvidence.<Clone>$() -> Rampart.NativeAot.NativeAotInvariantEvidence!
+Rampart.NativeAot.NativeAotInvariantEvidence.Deconstruct(out string! Pass, out bool Preserved, out string! InputSha256, out string! OutputSha256) -> void
+Rampart.NativeAot.NativeAotInvariantEvidence.Equals(Rampart.NativeAot.NativeAotInvariantEvidence? other) -> bool
+Rampart.NativeAot.NativeAotInvariantEvidence.InputSha256.get -> string!
+Rampart.NativeAot.NativeAotInvariantEvidence.InputSha256.init -> void
+Rampart.NativeAot.NativeAotInvariantEvidence.NativeAotInvariantEvidence(string! Pass, bool Preserved, string! InputSha256, string! OutputSha256) -> void
+Rampart.NativeAot.NativeAotInvariantEvidence.OutputSha256.get -> string!
+Rampart.NativeAot.NativeAotInvariantEvidence.OutputSha256.init -> void
+Rampart.NativeAot.NativeAotInvariantEvidence.Pass.get -> string!
+Rampart.NativeAot.NativeAotInvariantEvidence.Pass.init -> void
+Rampart.NativeAot.NativeAotInvariantEvidence.Preserved.get -> bool
+Rampart.NativeAot.NativeAotInvariantEvidence.Preserved.init -> void
+Rampart.NativeAot.NativeAotInvariantSnapshot
+Rampart.NativeAot.NativeAotInvariantSnapshot.OwnedRanges.get -> System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotOwnedRange!>!
+Rampart.NativeAot.NativeAotInvariantSnapshot.ValidateUnchanged(byte[]! candidate) -> void
+Rampart.NativeAot.NativeAotMarker
+Rampart.NativeAot.NativeAotOwnedRange
+Rampart.NativeAot.NativeAotOwnedRange.<Clone>$() -> Rampart.NativeAot.NativeAotOwnedRange!
+Rampart.NativeAot.NativeAotOwnedRange.Deconstruct(out string! Name, out int FileOffset, out int Length, out string! Sha256) -> void
+Rampart.NativeAot.NativeAotOwnedRange.Equals(Rampart.NativeAot.NativeAotOwnedRange? other) -> bool
+Rampart.NativeAot.NativeAotOwnedRange.FileOffset.get -> int
+Rampart.NativeAot.NativeAotOwnedRange.FileOffset.init -> void
+Rampart.NativeAot.NativeAotOwnedRange.Length.get -> int
+Rampart.NativeAot.NativeAotOwnedRange.Length.init -> void
+Rampart.NativeAot.NativeAotOwnedRange.Name.get -> string!
+Rampart.NativeAot.NativeAotOwnedRange.Name.init -> void
+Rampart.NativeAot.NativeAotOwnedRange.NativeAotOwnedRange(string! Name, int FileOffset, int Length, string! Sha256) -> void
+Rampart.NativeAot.NativeAotOwnedRange.Sha256.get -> string!
+Rampart.NativeAot.NativeAotOwnedRange.Sha256.init -> void
+Rampart.NativeAot.NativeAotPassDisposition
+Rampart.NativeAot.NativeAotPassDisposition.Adapt = 1 -> Rampart.NativeAot.NativeAotPassDisposition
+Rampart.NativeAot.NativeAotPassDisposition.Blocked = 2 -> Rampart.NativeAot.NativeAotPassDisposition
+Rampart.NativeAot.NativeAotPassDisposition.Direct = 0 -> Rampart.NativeAot.NativeAotPassDisposition
+Rampart.NativeAot.NativeAotPassDisposition.RequiresRuntimeMetadataProof = 3 -> Rampart.NativeAot.NativeAotPassDisposition
+Rampart.NativeAot.NativeAotPassEvidence
+Rampart.NativeAot.NativeAotPassEvidence.<Clone>$() -> Rampart.NativeAot.NativeAotPassEvidence!
+Rampart.NativeAot.NativeAotPassEvidence.ChangedBytes.get -> int
+Rampart.NativeAot.NativeAotPassEvidence.ChangedBytes.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.Deconstruct(out string! Knob, out Rampart.Config.ProtectionLevel Requested, out Rampart.Config.ProtectionLevel Effective, out Rampart.NativeAot.NativeAotPassDisposition Disposition, out Rampart.NativeAot.NativeAotEvidenceStatus Status, out string! ReasonCode, out string! Detail, out int ChangedBytes) -> void
+Rampart.NativeAot.NativeAotPassEvidence.Detail.get -> string!
+Rampart.NativeAot.NativeAotPassEvidence.Detail.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.Disposition.get -> Rampart.NativeAot.NativeAotPassDisposition
+Rampart.NativeAot.NativeAotPassEvidence.Disposition.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.Effective.get -> Rampart.Config.ProtectionLevel
+Rampart.NativeAot.NativeAotPassEvidence.Effective.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.Equals(Rampart.NativeAot.NativeAotPassEvidence? other) -> bool
+Rampart.NativeAot.NativeAotPassEvidence.Knob.get -> string!
+Rampart.NativeAot.NativeAotPassEvidence.Knob.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.NativeAotPassEvidence(string! Knob, Rampart.Config.ProtectionLevel Requested, Rampart.Config.ProtectionLevel Effective, Rampart.NativeAot.NativeAotPassDisposition Disposition, Rampart.NativeAot.NativeAotEvidenceStatus Status, string! ReasonCode, string! Detail, int ChangedBytes = 0) -> void
+Rampart.NativeAot.NativeAotPassEvidence.ReasonCode.get -> string!
+Rampart.NativeAot.NativeAotPassEvidence.ReasonCode.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.Requested.get -> Rampart.Config.ProtectionLevel
+Rampart.NativeAot.NativeAotPassEvidence.Requested.init -> void
+Rampart.NativeAot.NativeAotPassEvidence.Status.get -> Rampart.NativeAot.NativeAotEvidenceStatus
+Rampart.NativeAot.NativeAotPassEvidence.Status.init -> void
+Rampart.NativeAot.NativeAotPassPolicy
+Rampart.NativeAot.NativeAotReport
+Rampart.NativeAot.NativeAotReport.<Clone>$() -> Rampart.NativeAot.NativeAotReport!
+Rampart.NativeAot.NativeAotReport.AuditOnly.get -> bool
+Rampart.NativeAot.NativeAotReport.AuditOnly.init -> void
+Rampart.NativeAot.NativeAotReport.CanProtect.get -> bool
+Rampart.NativeAot.NativeAotReport.Deconstruct(out string! InputSha256, out string! OutputSha256, out long Seed, out int InputBytes, out int OutputBytes, out bool AuditOnly, out bool ReadyForAuthenticode, out System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotOwnedRange!>! OwnedRanges, out System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotPassEvidence!>! Passes, out System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotInvariantEvidence!>! Invariants) -> void
+Rampart.NativeAot.NativeAotReport.Equals(Rampart.NativeAot.NativeAotReport? other) -> bool
+Rampart.NativeAot.NativeAotReport.InputBytes.get -> int
+Rampart.NativeAot.NativeAotReport.InputBytes.init -> void
+Rampart.NativeAot.NativeAotReport.InputSha256.get -> string!
+Rampart.NativeAot.NativeAotReport.InputSha256.init -> void
+Rampart.NativeAot.NativeAotReport.Invariants.get -> System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotInvariantEvidence!>!
+Rampart.NativeAot.NativeAotReport.Invariants.init -> void
+Rampart.NativeAot.NativeAotReport.NativeAotReport(string! InputSha256, string! OutputSha256, long Seed, int InputBytes, int OutputBytes, bool AuditOnly, bool ReadyForAuthenticode, System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotOwnedRange!>! OwnedRanges, System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotPassEvidence!>! Passes, System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotInvariantEvidence!>! Invariants) -> void
+Rampart.NativeAot.NativeAotReport.OutputBytes.get -> int
+Rampart.NativeAot.NativeAotReport.OutputBytes.init -> void
+Rampart.NativeAot.NativeAotReport.OutputSha256.get -> string!
+Rampart.NativeAot.NativeAotReport.OutputSha256.init -> void
+Rampart.NativeAot.NativeAotReport.OwnedRanges.get -> System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotOwnedRange!>!
+Rampart.NativeAot.NativeAotReport.OwnedRanges.init -> void
+Rampart.NativeAot.NativeAotReport.Passes.get -> System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotPassEvidence!>!
+Rampart.NativeAot.NativeAotReport.Passes.init -> void
+Rampart.NativeAot.NativeAotReport.ReadyForAuthenticode.get -> bool
+Rampart.NativeAot.NativeAotReport.ReadyForAuthenticode.init -> void
+Rampart.NativeAot.NativeAotReport.Seed.get -> long
+Rampart.NativeAot.NativeAotReport.Seed.init -> void
+Rampart.NativeAot.NativeAotResult
+Rampart.NativeAot.NativeAotResult.<Clone>$() -> Rampart.NativeAot.NativeAotResult!
+Rampart.NativeAot.NativeAotResult.Deconstruct(out byte[]! Output, out Rampart.NativeAot.NativeAotReport! Report) -> void
+Rampart.NativeAot.NativeAotResult.Equals(Rampart.NativeAot.NativeAotResult? other) -> bool
+Rampart.NativeAot.NativeAotResult.NativeAotResult(byte[]! Output, Rampart.NativeAot.NativeAotReport! Report) -> void
+Rampart.NativeAot.NativeAotResult.Output.get -> byte[]!
+Rampart.NativeAot.NativeAotResult.Output.init -> void
+Rampart.NativeAot.NativeAotResult.Report.get -> Rampart.NativeAot.NativeAotReport!
+Rampart.NativeAot.NativeAotResult.Report.init -> void
+Rampart.NativeTransforms.CompiledNativeLeaf
+Rampart.NativeTransforms.CompiledNativeLeaf.<Clone>$() -> Rampart.NativeTransforms.CompiledNativeLeaf!
+Rampart.NativeTransforms.CompiledNativeLeaf.Code.get -> byte[]!
+Rampart.NativeTransforms.CompiledNativeLeaf.Code.init -> void
+Rampart.NativeTransforms.CompiledNativeLeaf.CompiledNativeLeaf(byte[]! Code, int JunkSites, int SplitConstants, int FlagLiveConstants) -> void
+Rampart.NativeTransforms.CompiledNativeLeaf.Deconstruct(out byte[]! Code, out int JunkSites, out int SplitConstants, out int FlagLiveConstants) -> void
+Rampart.NativeTransforms.CompiledNativeLeaf.Equals(Rampart.NativeTransforms.CompiledNativeLeaf? other) -> bool
+Rampart.NativeTransforms.CompiledNativeLeaf.FlagLiveConstants.get -> int
+Rampart.NativeTransforms.CompiledNativeLeaf.FlagLiveConstants.init -> void
+Rampart.NativeTransforms.CompiledNativeLeaf.JunkSites.get -> int
+Rampart.NativeTransforms.CompiledNativeLeaf.JunkSites.init -> void
+Rampart.NativeTransforms.CompiledNativeLeaf.SplitConstants.get -> int
+Rampart.NativeTransforms.CompiledNativeLeaf.SplitConstants.init -> void
+Rampart.NativeTransforms.NativeLeafCompiler
+Rampart.NativeTransforms.NativeTransformOptions
+Rampart.NativeTransforms.NativeTransformOptions.<Clone>$() -> Rampart.NativeTransforms.NativeTransformOptions!
+Rampart.NativeTransforms.NativeTransformOptions.ConstantDepth.get -> int
+Rampart.NativeTransforms.NativeTransformOptions.ConstantDepth.init -> void
+Rampart.NativeTransforms.NativeTransformOptions.Deconstruct(out int JunkDensity, out bool SplitConstants) -> void
+Rampart.NativeTransforms.NativeTransformOptions.Equals(Rampart.NativeTransforms.NativeTransformOptions? other) -> bool
+Rampart.NativeTransforms.NativeTransformOptions.JunkDensity.get -> int
+Rampart.NativeTransforms.NativeTransformOptions.JunkDensity.init -> void
+Rampart.NativeTransforms.NativeTransformOptions.NativeTransformOptions(int JunkDensity, bool SplitConstants) -> void
+Rampart.NativeTransforms.NativeTransformOptions.SplitConstants.get -> bool
+Rampart.NativeTransforms.NativeTransformOptions.SplitConstants.init -> void
+Rampart.Packing.LzssDecoderEmitter
+Rampart.Pe.DataDir
+Rampart.Pe.DataDirectory
+Rampart.Pe.DataDirectory.<Clone>$() -> Rampart.Pe.DataDirectory!
+Rampart.Pe.DataDirectory.DataDirectory(uint RelativeVirtualAddress, uint Size) -> void
+Rampart.Pe.DataDirectory.Deconstruct(out uint RelativeVirtualAddress, out uint Size) -> void
+Rampart.Pe.DataDirectory.Equals(Rampart.Pe.DataDirectory? other) -> bool
+Rampart.Pe.DataDirectory.IsEmpty.get -> bool
+Rampart.Pe.DataDirectory.RelativeVirtualAddress.get -> uint
+Rampart.Pe.DataDirectory.RelativeVirtualAddress.init -> void
+Rampart.Pe.DataDirectory.Size.get -> uint
+Rampart.Pe.DataDirectory.Size.init -> void
+Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.AppContainer = 4096 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.DynamicBase = 64 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.ForceIntegrity = 128 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.GuardCf = 16384 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.HighEntropyVa = 32 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.NoBind = 2048 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.NoIsolation = 512 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.NoSeh = 1024 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.NxCompatible = 256 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.TerminalServerAware = 32768 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.DllCharacteristics.WdmDriver = 8192 -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.ExceptionTable
+Rampart.Pe.ExceptionTableBuilder
+Rampart.Pe.ExtendedDllCharacteristicsEditor
+Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.CfFunctionTablePresent = 1024 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.CfInstrumented = 256 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.CfLongJumpTablePresent = 65536 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.EhContinuationTablePresent = 4194304 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.ProtectDelayLoadIat = 4096 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.RetpolinePresent = 1048576 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImageGuardFlags.XfgEnabled = 8388608 -> Rampart.Pe.ImageGuardFlags
+Rampart.Pe.ImportDirectoryEditor
+Rampart.Pe.ImportedFunction
+Rampart.Pe.ImportedFunction.<Clone>$() -> Rampart.Pe.ImportedFunction!
+Rampart.Pe.ImportedFunction.Deconstruct(out string! Dll, out string! Name, out uint Hint, out uint ThunkRva) -> void
+Rampart.Pe.ImportedFunction.Dll.get -> string!
+Rampart.Pe.ImportedFunction.Dll.init -> void
+Rampart.Pe.ImportedFunction.Equals(Rampart.Pe.ImportedFunction? other) -> bool
+Rampart.Pe.ImportedFunction.Hint.get -> uint
+Rampart.Pe.ImportedFunction.Hint.init -> void
+Rampart.Pe.ImportedFunction.ImportedFunction(string! Dll, string! Name, uint Hint, uint ThunkRva) -> void
+Rampart.Pe.ImportedFunction.Name.get -> string!
+Rampart.Pe.ImportedFunction.Name.init -> void
+Rampart.Pe.ImportedFunction.ThunkRva.get -> uint
+Rampart.Pe.ImportedFunction.ThunkRva.init -> void
+Rampart.Pe.ImportTable
+Rampart.Pe.MachineType
+Rampart.Pe.MachineType.Amd64 = 34404 -> Rampart.Pe.MachineType
+Rampart.Pe.MachineType.Arm64 = 43620 -> Rampart.Pe.MachineType
+Rampart.Pe.MachineType.I386 = 332 -> Rampart.Pe.MachineType
+Rampart.Pe.PeChecksum
+Rampart.Pe.PeImage
+Rampart.Pe.PeImage.AddSection(string! name, int virtualSize, Rampart.Pe.SectionCharacteristics chars) -> Rampart.Pe.PeImage.Section!
+Rampart.Pe.PeImage.BaseOfCode.get -> uint
+Rampart.Pe.PeImage.Characteristics.get -> ushort
+Rampart.Pe.PeImage.Characteristics.set -> void
+Rampart.Pe.PeImage.Checksum.get -> uint
+Rampart.Pe.PeImage.Checksum.set -> void
+Rampart.Pe.PeImage.Directory(int index) -> Rampart.Pe.DataDirectory!
+Rampart.Pe.PeImage.DllCharacteristicsRaw.get -> ushort
+Rampart.Pe.PeImage.DllCharacteristicsRaw.set -> void
+Rampart.Pe.PeImage.DllChars.get -> Rampart.Pe.DllCharacteristics
+Rampart.Pe.PeImage.DllChars.set -> void
+Rampart.Pe.PeImage.EntryPointRva.get -> uint
+Rampart.Pe.PeImage.EntryPointRva.set -> void
+Rampart.Pe.PeImage.FileAlignment.get -> uint
+Rampart.Pe.PeImage.FileAlignment.set -> void
+Rampart.Pe.PeImage.ImageBase.get -> ulong
+Rampart.Pe.PeImage.ImageVersion.get -> (ushort Major, ushort Minor)
+Rampart.Pe.PeImage.ImageVersion.set -> void
+Rampart.Pe.PeImage.IsPe32Plus.get -> bool
+Rampart.Pe.PeImage.LinkerVersion.get -> (byte Major, byte Minor)
+Rampart.Pe.PeImage.LinkerVersion.set -> void
+Rampart.Pe.PeImage.Machine.get -> Rampart.Pe.MachineType
+Rampart.Pe.PeImage.Machine.set -> void
+Rampart.Pe.PeImage.NumberOfRvaAndSizes.get -> uint
+Rampart.Pe.PeImage.NumberOfSections.get -> ushort
+Rampart.Pe.PeImage.NumberOfSections.set -> void
+Rampart.Pe.PeImage.OffsetToRva(int offset) -> uint
+Rampart.Pe.PeImage.OptionalMagic.get -> ushort
+Rampart.Pe.PeImage.OverlaySize.get -> int
+Rampart.Pe.PeImage.ReadCString(uint rva) -> string!
+Rampart.Pe.PeImage.ReadRva(uint rva, int length) -> byte[]!
+Rampart.Pe.PeImage.ReadU32(uint rva) -> uint
+Rampart.Pe.PeImage.ReadU64(uint rva) -> ulong
+Rampart.Pe.PeImage.RvaToOffset(uint rva) -> int
+Rampart.Pe.PeImage.Save(string! path) -> void
+Rampart.Pe.PeImage.ScrubCoffSymbolPayload() -> int
+Rampart.Pe.PeImage.ScrubDosStub.get -> bool
+Rampart.Pe.PeImage.ScrubDosStub.set -> void
+Rampart.Pe.PeImage.ScrubDosStubContent() -> void
+Rampart.Pe.PeImage.Section
+Rampart.Pe.PeImage.Section.Characteristics -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.PeImage.Section.ContainsRva(uint rva) -> bool
+Rampart.Pe.PeImage.Section.Data -> byte[]!
+Rampart.Pe.PeImage.Section.IsExecutable.get -> bool
+Rampart.Pe.PeImage.Section.Name -> string!
+Rampart.Pe.PeImage.Section.PointerToRawData -> uint
+Rampart.Pe.PeImage.Section.ResolvedVirtualSize.get -> uint
+Rampart.Pe.PeImage.Section.Section() -> void
+Rampart.Pe.PeImage.Section.SizeOfRawData -> uint
+Rampart.Pe.PeImage.Section.VirtualAddress -> uint
+Rampart.Pe.PeImage.Section.VirtualSize -> uint
+Rampart.Pe.PeImage.SectionAlignment.get -> uint
+Rampart.Pe.PeImage.SectionAlignment.set -> void
+Rampart.Pe.PeImage.SectionFromRva(uint rva) -> Rampart.Pe.PeImage.Section?
+Rampart.Pe.PeImage.Sections.get -> System.Collections.Generic.List<Rampart.Pe.PeImage.Section!>!
+Rampart.Pe.PeImage.SetDirectory(int index, uint rva, uint size) -> void
+Rampart.Pe.PeImage.SizeOfHeaders.get -> uint
+Rampart.Pe.PeImage.SizeOfHeaders.set -> void
+Rampart.Pe.PeImage.SizeOfImage.get -> uint
+Rampart.Pe.PeImage.SizeOfImage.set -> void
+Rampart.Pe.PeImage.SizeOfOptionalHeader.get -> ushort
+Rampart.Pe.PeImage.SizeOfOptionalHeader.set -> void
+Rampart.Pe.PeImage.TimeDateStamp.get -> uint
+Rampart.Pe.PeImage.TimeDateStamp.set -> void
+Rampart.Pe.PeImage.ToBytes() -> byte[]!
+Rampart.Pe.PeImage.TryOffsetToRva(int offset, out uint rva) -> bool
+Rampart.Pe.PeImage.TryRvaToOffset(uint rva, out int offset) -> bool
+Rampart.Pe.PeImage.VaToRva(ulong va) -> uint
+Rampart.Pe.PeImage.WriteDosStub(int offset, System.ReadOnlySpan<byte> data) -> void
+Rampart.Pe.PeImage.WriteRva(uint rva, System.ReadOnlySpan<byte> data) -> void
+Rampart.Pe.Relocations
+Rampart.Pe.RelocEntry
+Rampart.Pe.RelocEntry.Deconstruct(out uint Rva, out ushort Type) -> void
+Rampart.Pe.RelocEntry.Equals(Rampart.Pe.RelocEntry other) -> bool
+Rampart.Pe.RelocEntry.RelocEntry() -> void
+Rampart.Pe.RelocEntry.RelocEntry(uint Rva, ushort Type) -> void
+Rampart.Pe.RelocEntry.Rva.get -> uint
+Rampart.Pe.RelocEntry.Rva.init -> void
+Rampart.Pe.RelocEntry.Type.get -> ushort
+Rampart.Pe.RelocEntry.Type.init -> void
+Rampart.Pe.RuntimeFunction
+Rampart.Pe.RuntimeFunction.BeginRva.get -> uint
+Rampart.Pe.RuntimeFunction.BeginRva.init -> void
+Rampart.Pe.RuntimeFunction.Deconstruct(out uint BeginRva, out uint EndRva, out uint UnwindRva) -> void
+Rampart.Pe.RuntimeFunction.EndRva.get -> uint
+Rampart.Pe.RuntimeFunction.EndRva.init -> void
+Rampart.Pe.RuntimeFunction.Equals(Rampart.Pe.RuntimeFunction other) -> bool
+Rampart.Pe.RuntimeFunction.RuntimeFunction() -> void
+Rampart.Pe.RuntimeFunction.RuntimeFunction(uint BeginRva, uint EndRva, uint UnwindRva) -> void
+Rampart.Pe.RuntimeFunction.UnwindRva.get -> uint
+Rampart.Pe.RuntimeFunction.UnwindRva.init -> void
+Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.CntCode = 32 -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.CntInitializedData = 64 -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.CntUninitializedData = 128 -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.MemExecute = 536870912 -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.MemRead = 1073741824 -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.MemWrite = 2147483648 -> Rampart.Pe.SectionCharacteristics
+Rampart.Pe.SectionCharacteristics.TypeNoPad = 8 -> Rampart.Pe.SectionCharacteristics
+Rampart.Symbols.SymbolLoader
+Rampart.Symbols.SymbolRecord
+Rampart.Symbols.SymbolRecord.EndRva.get -> uint?
+Rampart.Symbols.SymbolRecord.EndRva.set -> void
+Rampart.Symbols.SymbolRecord.Module.get -> string?
+Rampart.Symbols.SymbolRecord.Module.set -> void
+Rampart.Symbols.SymbolRecord.Name.get -> string!
+Rampart.Symbols.SymbolRecord.Name.set -> void
+Rampart.Symbols.SymbolRecord.Source.get -> string?
+Rampart.Symbols.SymbolRecord.Source.set -> void
+Rampart.Symbols.SymbolRecord.StartRva.get -> uint
+Rampart.Symbols.SymbolRecord.StartRva.set -> void
+Rampart.Symbols.SymbolRecord.SymbolRecord() -> void
+Rampart.Targets.ArtifactGraph
+Rampart.Targets.ArtifactGraph.<Clone>$() -> Rampart.Targets.ArtifactGraph!
+Rampart.Targets.ArtifactGraph.ArtifactGraph(string! Primary, System.Collections.Generic.IReadOnlyList<Rampart.Targets.ArtifactNode!>! Artifacts, Rampart.Targets.ArtifactSigningInstructions? SigningInstructions = null) -> void
+Rampart.Targets.ArtifactGraph.Artifacts.get -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ArtifactNode!>!
+Rampart.Targets.ArtifactGraph.Artifacts.init -> void
+Rampart.Targets.ArtifactGraph.Deconstruct(out string! Primary, out System.Collections.Generic.IReadOnlyList<Rampart.Targets.ArtifactNode!>! Artifacts, out Rampart.Targets.ArtifactSigningInstructions? SigningInstructions) -> void
+Rampart.Targets.ArtifactGraph.Equals(Rampart.Targets.ArtifactGraph? other) -> bool
+Rampart.Targets.ArtifactGraph.Primary.get -> string!
+Rampart.Targets.ArtifactGraph.Primary.init -> void
+Rampart.Targets.ArtifactGraph.SigningInstructions.get -> Rampart.Targets.ArtifactSigningInstructions?
+Rampart.Targets.ArtifactGraph.SigningInstructions.init -> void
+Rampart.Targets.ArtifactNode
+Rampart.Targets.ArtifactNode.<Clone>$() -> Rampart.Targets.ArtifactNode!
+Rampart.Targets.ArtifactNode.ArtifactNode(string! RelativePath, string! Role, string! Sha256, long Size) -> void
+Rampart.Targets.ArtifactNode.Deconstruct(out string! RelativePath, out string! Role, out string! Sha256, out long Size) -> void
+Rampart.Targets.ArtifactNode.Equals(Rampart.Targets.ArtifactNode? other) -> bool
+Rampart.Targets.ArtifactNode.RelativePath.get -> string!
+Rampart.Targets.ArtifactNode.RelativePath.init -> void
+Rampart.Targets.ArtifactNode.Role.get -> string!
+Rampart.Targets.ArtifactNode.Role.init -> void
+Rampart.Targets.ArtifactNode.Sha256.get -> string!
+Rampart.Targets.ArtifactNode.Sha256.init -> void
+Rampart.Targets.ArtifactNode.Size.get -> long
+Rampart.Targets.ArtifactNode.Size.init -> void
+Rampart.Targets.ArtifactSigningInstructions
+Rampart.Targets.ArtifactSigningInstructions.<Clone>$() -> Rampart.Targets.ArtifactSigningInstructions!
+Rampart.Targets.ArtifactSigningInstructions.ArtifactSigningInstructions(string! StrongName, string! Authenticode, string? StrongNameKeyEnvironmentVariable = null) -> void
+Rampart.Targets.ArtifactSigningInstructions.Authenticode.get -> string!
+Rampart.Targets.ArtifactSigningInstructions.Authenticode.init -> void
+Rampart.Targets.ArtifactSigningInstructions.Deconstruct(out string! StrongName, out string! Authenticode, out string? StrongNameKeyEnvironmentVariable) -> void
+Rampart.Targets.ArtifactSigningInstructions.Equals(Rampart.Targets.ArtifactSigningInstructions? other) -> bool
+Rampart.Targets.ArtifactSigningInstructions.StrongName.get -> string!
+Rampart.Targets.ArtifactSigningInstructions.StrongName.init -> void
+Rampart.Targets.ArtifactSigningInstructions.StrongNameKeyEnvironmentVariable.get -> string?
+Rampart.Targets.ArtifactSigningInstructions.StrongNameKeyEnvironmentVariable.init -> void
+Rampart.Targets.ArtifactWriter
+Rampart.Targets.BackendProtectionResult
+Rampart.Targets.BackendProtectionResult.BackendProtectionResult() -> void
+Rampart.Targets.BackendProtectionResult.Details.get -> object?
+Rampart.Targets.BackendProtectionResult.Details.init -> void
+Rampart.Targets.BackendProtectionResult.Evidence.get -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionEvidence!>!
+Rampart.Targets.BackendProtectionResult.Evidence.init -> void
+Rampart.Targets.BackendProtectionResult.InputSha256.get -> string!
+Rampart.Targets.BackendProtectionResult.InputSha256.init -> void
+Rampart.Targets.BackendProtectionResult.InputSize.get -> int
+Rampart.Targets.BackendProtectionResult.InputSize.init -> void
+Rampart.Targets.BackendProtectionResult.Output.get -> byte[]!
+Rampart.Targets.BackendProtectionResult.Output.init -> void
+Rampart.Targets.BackendProtectionResult.OutputSha256.get -> string!
+Rampart.Targets.BackendProtectionResult.OutputSha256.init -> void
+Rampart.Targets.BackendProtectionResult.Plan.get -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.BackendProtectionResult.Plan.init -> void
+Rampart.Targets.BackendProtectionResult.PrivateMap.get -> object!
+Rampart.Targets.BackendProtectionResult.PrivateMap.init -> void
+Rampart.Targets.BackendProtectionResult.Seed.get -> long
+Rampart.Targets.BackendProtectionResult.Seed.init -> void
+Rampart.Targets.BackendProtectionResult.Symbols.get -> byte[]?
+Rampart.Targets.BackendProtectionResult.Symbols.init -> void
+Rampart.Targets.EvidenceDisposition
+Rampart.Targets.EvidenceDisposition.Applied = 0 -> Rampart.Targets.EvidenceDisposition
+Rampart.Targets.EvidenceDisposition.Rejected = 2 -> Rampart.Targets.EvidenceDisposition
+Rampart.Targets.EvidenceDisposition.Skipped = 1 -> Rampart.Targets.EvidenceDisposition
+Rampart.Targets.IProtectionBackend
+Rampart.Targets.IProtectionBackend.DescribeEvidence(Rampart.Targets.BackendProtectionResult! result) -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionEvidence!>!
+Rampart.Targets.IProtectionBackend.Inspect(byte[]! input) -> Rampart.Targets.TargetClassification!
+Rampart.Targets.IProtectionBackend.Kind.get -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.IProtectionBackend.Name.get -> string!
+Rampart.Targets.IProtectionBackend.Plan(byte[]! input, Rampart.Config.ProtectionSettings! settings) -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.IProtectionBackend.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, byte[]? symbols = null) -> Rampart.Targets.BackendProtectionResult!
+Rampart.Targets.IProtectionBackend.Validate(byte[]! original, Rampart.Targets.BackendProtectionResult! result) -> void
+Rampart.Targets.ManagedProtectionBackend
+Rampart.Targets.ManagedProtectionBackend.DescribeEvidence(Rampart.Targets.BackendProtectionResult! result) -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionEvidence!>!
+Rampart.Targets.ManagedProtectionBackend.Inspect(byte[]! input) -> Rampart.Targets.TargetClassification!
+Rampart.Targets.ManagedProtectionBackend.Kind.get -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ManagedProtectionBackend.ManagedProtectionBackend() -> void
+Rampart.Targets.ManagedProtectionBackend.Name.get -> string!
+Rampart.Targets.ManagedProtectionBackend.Plan(byte[]! input, Rampart.Config.ProtectionSettings! settings) -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.ManagedProtectionBackend.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, byte[]? symbols = null) -> Rampart.Targets.BackendProtectionResult!
+Rampart.Targets.ManagedProtectionBackend.Validate(byte[]! original, Rampart.Targets.BackendProtectionResult! result) -> void
+Rampart.Targets.NativeAotProtectionBackend
+Rampart.Targets.NativeAotProtectionBackend.DescribeEvidence(Rampart.Targets.BackendProtectionResult! result) -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionEvidence!>!
+Rampart.Targets.NativeAotProtectionBackend.Inspect(byte[]! input) -> Rampart.Targets.TargetClassification!
+Rampart.Targets.NativeAotProtectionBackend.Kind.get -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.NativeAotProtectionBackend.Name.get -> string!
+Rampart.Targets.NativeAotProtectionBackend.NativeAotProtectionBackend() -> void
+Rampart.Targets.NativeAotProtectionBackend.Plan(byte[]! input, Rampart.Config.ProtectionSettings! settings) -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.NativeAotProtectionBackend.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, byte[]? symbols = null) -> Rampart.Targets.BackendProtectionResult!
+Rampart.Targets.NativeAotProtectionBackend.Validate(byte[]! original, Rampart.Targets.BackendProtectionResult! result) -> void
+Rampart.Targets.NativePeBackend
+Rampart.Targets.NativePeBackend.DescribeEvidence(Rampart.Targets.BackendProtectionResult! result) -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionEvidence!>!
+Rampart.Targets.NativePeBackend.Inspect(byte[]! input) -> Rampart.Targets.TargetClassification!
+Rampart.Targets.NativePeBackend.Kind.get -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.NativePeBackend.Name.get -> string!
+Rampart.Targets.NativePeBackend.NativePeBackend() -> void
+Rampart.Targets.NativePeBackend.Plan(byte[]! input, Rampart.Config.ProtectionSettings! settings) -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.NativePeBackend.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, byte[]? symbols = null) -> Rampart.Targets.BackendProtectionResult!
+Rampart.Targets.NativePeBackend.Validate(byte[]! original, Rampart.Targets.BackendProtectionResult! result) -> void
+Rampart.Targets.OutputArtifact
+Rampart.Targets.OutputArtifact.<Clone>$() -> Rampart.Targets.OutputArtifact!
+Rampart.Targets.OutputArtifact.Bytes.get -> byte[]!
+Rampart.Targets.OutputArtifact.Bytes.init -> void
+Rampart.Targets.OutputArtifact.Deconstruct(out string! Path, out byte[]! Bytes) -> void
+Rampart.Targets.OutputArtifact.Equals(Rampart.Targets.OutputArtifact? other) -> bool
+Rampart.Targets.OutputArtifact.OutputArtifact(string! Path, byte[]! Bytes) -> void
+Rampart.Targets.OutputArtifact.Path.get -> string!
+Rampart.Targets.OutputArtifact.Path.init -> void
+Rampart.Targets.PlannedProtection
+Rampart.Targets.PlannedProtection.<Clone>$() -> Rampart.Targets.PlannedProtection!
+Rampart.Targets.PlannedProtection.Deconstruct(out string! Id, out string! Requested, out string! Effective, out string! ReasonCode) -> void
+Rampart.Targets.PlannedProtection.Effective.get -> string!
+Rampart.Targets.PlannedProtection.Effective.init -> void
+Rampart.Targets.PlannedProtection.Equals(Rampart.Targets.PlannedProtection? other) -> bool
+Rampart.Targets.PlannedProtection.Id.get -> string!
+Rampart.Targets.PlannedProtection.Id.init -> void
+Rampart.Targets.PlannedProtection.PlannedProtection(string! Id, string! Requested, string! Effective, string! ReasonCode) -> void
+Rampart.Targets.PlannedProtection.ReasonCode.get -> string!
+Rampart.Targets.PlannedProtection.ReasonCode.init -> void
+Rampart.Targets.PlannedProtection.Requested.get -> string!
+Rampart.Targets.PlannedProtection.Requested.init -> void
+Rampart.Targets.ProtectionEvidence
+Rampart.Targets.ProtectionEvidence.<Clone>$() -> Rampart.Targets.ProtectionEvidence!
+Rampart.Targets.ProtectionEvidence.Deconstruct(out string! Protection, out Rampart.Targets.ProtectionSubject! Original, out Rampart.Targets.ProtectionSubject! Protected, out string! Requested, out Rampart.Targets.EvidenceDisposition Disposition, out string! ReasonCode, out int? OriginalSize, out int? ProtectedSize, out string? OriginalHash, out string? ProtectedHash, out System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionMeasurement!>? Measurements, out string? VerificationStatus) -> void
+Rampart.Targets.ProtectionEvidence.Disposition.get -> Rampart.Targets.EvidenceDisposition
+Rampart.Targets.ProtectionEvidence.Disposition.init -> void
+Rampart.Targets.ProtectionEvidence.Equals(Rampart.Targets.ProtectionEvidence? other) -> bool
+Rampart.Targets.ProtectionEvidence.Measurements.get -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionMeasurement!>?
+Rampart.Targets.ProtectionEvidence.Measurements.init -> void
+Rampart.Targets.ProtectionEvidence.Original.get -> Rampart.Targets.ProtectionSubject!
+Rampart.Targets.ProtectionEvidence.Original.init -> void
+Rampart.Targets.ProtectionEvidence.OriginalHash.get -> string?
+Rampart.Targets.ProtectionEvidence.OriginalHash.init -> void
+Rampart.Targets.ProtectionEvidence.OriginalSize.get -> int?
+Rampart.Targets.ProtectionEvidence.OriginalSize.init -> void
+Rampart.Targets.ProtectionEvidence.Protected.get -> Rampart.Targets.ProtectionSubject!
+Rampart.Targets.ProtectionEvidence.Protected.init -> void
+Rampart.Targets.ProtectionEvidence.ProtectedHash.get -> string?
+Rampart.Targets.ProtectionEvidence.ProtectedHash.init -> void
+Rampart.Targets.ProtectionEvidence.ProtectedSize.get -> int?
+Rampart.Targets.ProtectionEvidence.ProtectedSize.init -> void
+Rampart.Targets.ProtectionEvidence.Protection.get -> string!
+Rampart.Targets.ProtectionEvidence.Protection.init -> void
+Rampart.Targets.ProtectionEvidence.ProtectionEvidence(string! Protection, Rampart.Targets.ProtectionSubject! Original, Rampart.Targets.ProtectionSubject! Protected, string! Requested, Rampart.Targets.EvidenceDisposition Disposition, string! ReasonCode, int? OriginalSize = null, int? ProtectedSize = null, string? OriginalHash = null, string? ProtectedHash = null, System.Collections.Generic.IReadOnlyList<Rampart.Targets.ProtectionMeasurement!>? Measurements = null, string? VerificationStatus = null) -> void
+Rampart.Targets.ProtectionEvidence.ReasonCode.get -> string!
+Rampart.Targets.ProtectionEvidence.ReasonCode.init -> void
+Rampart.Targets.ProtectionEvidence.Requested.get -> string!
+Rampart.Targets.ProtectionEvidence.Requested.init -> void
+Rampart.Targets.ProtectionEvidence.VerificationStatus.get -> string?
+Rampart.Targets.ProtectionEvidence.VerificationStatus.init -> void
+Rampart.Targets.ProtectionMeasurement
+Rampart.Targets.ProtectionMeasurement.<Clone>$() -> Rampart.Targets.ProtectionMeasurement!
+Rampart.Targets.ProtectionMeasurement.Baseline.get -> double?
+Rampart.Targets.ProtectionMeasurement.Baseline.init -> void
+Rampart.Targets.ProtectionMeasurement.Budget.get -> double?
+Rampart.Targets.ProtectionMeasurement.Budget.init -> void
+Rampart.Targets.ProtectionMeasurement.Deconstruct(out string! Metric, out double Value, out string! Unit, out string! EvidenceSource, out double? Baseline, out double? Budget) -> void
+Rampart.Targets.ProtectionMeasurement.Equals(Rampart.Targets.ProtectionMeasurement? other) -> bool
+Rampart.Targets.ProtectionMeasurement.EvidenceSource.get -> string!
+Rampart.Targets.ProtectionMeasurement.EvidenceSource.init -> void
+Rampart.Targets.ProtectionMeasurement.Metric.get -> string!
+Rampart.Targets.ProtectionMeasurement.Metric.init -> void
+Rampart.Targets.ProtectionMeasurement.ProtectionMeasurement(string! Metric, double Value, string! Unit, string! EvidenceSource, double? Baseline = null, double? Budget = null) -> void
+Rampart.Targets.ProtectionMeasurement.Unit.get -> string!
+Rampart.Targets.ProtectionMeasurement.Unit.init -> void
+Rampart.Targets.ProtectionMeasurement.Value.get -> double
+Rampart.Targets.ProtectionMeasurement.Value.init -> void
+Rampart.Targets.ProtectionPipeline
+Rampart.Targets.ProtectionPipeline.Plan(byte[]! input, Rampart.Config.ProtectionSettings! settings) -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.ProtectionPipeline.Plan(byte[]! input, Rampart.Config.ProtectionSettings! settings, string? inputPath) -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.ProtectionPipeline.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, byte[]? symbols = null) -> Rampart.Targets.BackendProtectionResult!
+Rampart.Targets.ProtectionPipeline.Protect(byte[]! input, Rampart.Config.ProtectionSettings! settings, byte[]? symbols, string? inputPath) -> Rampart.Targets.BackendProtectionResult!
+Rampart.Targets.ProtectionPipeline.ProtectionPipeline() -> void
+Rampart.Targets.ProtectionPlan
+Rampart.Targets.ProtectionPlan.<Clone>$() -> Rampart.Targets.ProtectionPlan!
+Rampart.Targets.ProtectionPlan.Backend.get -> string!
+Rampart.Targets.ProtectionPlan.Backend.init -> void
+Rampart.Targets.ProtectionPlan.Classification.get -> Rampart.Targets.TargetClassification!
+Rampart.Targets.ProtectionPlan.Classification.init -> void
+Rampart.Targets.ProtectionPlan.Deconstruct(out Rampart.Targets.TargetClassification! Classification, out string! Backend, out System.Collections.Generic.IReadOnlyList<Rampart.Targets.PlannedProtection!>! Protections, out System.Collections.Generic.IReadOnlyList<string!>! Diagnostics) -> void
+Rampart.Targets.ProtectionPlan.Diagnostics.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Targets.ProtectionPlan.Diagnostics.init -> void
+Rampart.Targets.ProtectionPlan.Equals(Rampart.Targets.ProtectionPlan? other) -> bool
+Rampart.Targets.ProtectionPlan.ProtectionPlan(Rampart.Targets.TargetClassification! Classification, string! Backend, System.Collections.Generic.IReadOnlyList<Rampart.Targets.PlannedProtection!>! Protections, System.Collections.Generic.IReadOnlyList<string!>! Diagnostics) -> void
+Rampart.Targets.ProtectionPlan.Protections.get -> System.Collections.Generic.IReadOnlyList<Rampart.Targets.PlannedProtection!>!
+Rampart.Targets.ProtectionPlan.Protections.init -> void
+Rampart.Targets.ProtectionSubject
+Rampart.Targets.ProtectionSubject.<Clone>$() -> Rampart.Targets.ProtectionSubject!
+Rampart.Targets.ProtectionSubject.Assembly.get -> string?
+Rampart.Targets.ProtectionSubject.Assembly.init -> void
+Rampart.Targets.ProtectionSubject.Deconstruct(out string! Identity, out string? Assembly, out string? Module, out string? Type, out string? Signature, out int? MetadataToken, out uint? Rva) -> void
+Rampart.Targets.ProtectionSubject.Equals(Rampart.Targets.ProtectionSubject? other) -> bool
+Rampart.Targets.ProtectionSubject.Identity.get -> string!
+Rampart.Targets.ProtectionSubject.Identity.init -> void
+Rampart.Targets.ProtectionSubject.MetadataToken.get -> int?
+Rampart.Targets.ProtectionSubject.MetadataToken.init -> void
+Rampart.Targets.ProtectionSubject.Module.get -> string?
+Rampart.Targets.ProtectionSubject.Module.init -> void
+Rampart.Targets.ProtectionSubject.ProtectionSubject(string! Identity, string? Assembly = null, string? Module = null, string? Type = null, string? Signature = null, int? MetadataToken = null, uint? Rva = null) -> void
+Rampart.Targets.ProtectionSubject.Rva.get -> uint?
+Rampart.Targets.ProtectionSubject.Rva.init -> void
+Rampart.Targets.ProtectionSubject.Signature.get -> string?
+Rampart.Targets.ProtectionSubject.Signature.init -> void
+Rampart.Targets.ProtectionSubject.Type.get -> string?
+Rampart.Targets.ProtectionSubject.Type.init -> void
+Rampart.Targets.ProtectionTarget
+Rampart.Targets.ProtectionTarget.<Clone>$() -> Rampart.Targets.ProtectionTarget!
+Rampart.Targets.ProtectionTarget.Architecture.get -> string!
+Rampart.Targets.ProtectionTarget.Architecture.init -> void
+Rampart.Targets.ProtectionTarget.CompatibilityFeatures.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Targets.ProtectionTarget.CompatibilityFeatures.init -> void
+Rampart.Targets.ProtectionTarget.Deconstruct(out Rampart.Targets.ProtectionTargetKind Kind, out string! Architecture, out string! RuntimeFamily, out string! DeploymentShape, out string! SigningState, out System.Collections.Generic.IReadOnlyList<string!>! CompatibilityFeatures) -> void
+Rampart.Targets.ProtectionTarget.DeploymentShape.get -> string!
+Rampart.Targets.ProtectionTarget.DeploymentShape.init -> void
+Rampart.Targets.ProtectionTarget.Equals(Rampart.Targets.ProtectionTarget? other) -> bool
+Rampart.Targets.ProtectionTarget.Kind.get -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTarget.Kind.init -> void
+Rampart.Targets.ProtectionTarget.ProtectionTarget(Rampart.Targets.ProtectionTargetKind Kind, string! Architecture, string! RuntimeFamily, string! DeploymentShape, string! SigningState, System.Collections.Generic.IReadOnlyList<string!>! CompatibilityFeatures) -> void
+Rampart.Targets.ProtectionTarget.RuntimeFamily.get -> string!
+Rampart.Targets.ProtectionTarget.RuntimeFamily.init -> void
+Rampart.Targets.ProtectionTarget.SigningState.get -> string!
+Rampart.Targets.ProtectionTarget.SigningState.init -> void
+Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.AlreadyProtected = 8 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.FrameworkDependentAppHost = 4 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.ManagedIl = 2 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.MixedMode = 7 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.NativeAot = 1 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.NativePe = 0 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.NativePeX86 = 10 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.ReadyToRun = 3 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.SelfContainedAppHost = 5 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.SingleFileBundle = 6 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.ProtectionTargetKind.Unknown = 9 -> Rampart.Targets.ProtectionTargetKind
+Rampart.Targets.TargetClassification
+Rampart.Targets.TargetClassification.<Clone>$() -> Rampart.Targets.TargetClassification!
+Rampart.Targets.TargetClassification.CanProtect.get -> bool
+Rampart.Targets.TargetClassification.Deconstruct(out Rampart.Targets.ProtectionTarget! Target, out Rampart.Targets.TargetDisposition Disposition, out string! ReasonCode, out System.Collections.Generic.IReadOnlyList<string!>! Evidence) -> void
+Rampart.Targets.TargetClassification.Disposition.get -> Rampart.Targets.TargetDisposition
+Rampart.Targets.TargetClassification.Disposition.init -> void
+Rampart.Targets.TargetClassification.Equals(Rampart.Targets.TargetClassification? other) -> bool
+Rampart.Targets.TargetClassification.Evidence.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Rampart.Targets.TargetClassification.Evidence.init -> void
+Rampart.Targets.TargetClassification.ReasonCode.get -> string!
+Rampart.Targets.TargetClassification.ReasonCode.init -> void
+Rampart.Targets.TargetClassification.Target.get -> Rampart.Targets.ProtectionTarget!
+Rampart.Targets.TargetClassification.Target.init -> void
+Rampart.Targets.TargetClassification.TargetClassification(Rampart.Targets.ProtectionTarget! Target, Rampart.Targets.TargetDisposition Disposition, string! ReasonCode, System.Collections.Generic.IReadOnlyList<string!>! Evidence) -> void
+Rampart.Targets.TargetClassifier
+Rampart.Targets.TargetDisposition
+Rampart.Targets.TargetDisposition.Ambiguous = 3 -> Rampart.Targets.TargetDisposition
+Rampart.Targets.TargetDisposition.Inspect = 1 -> Rampart.Targets.TargetDisposition
+Rampart.Targets.TargetDisposition.Supported = 0 -> Rampart.Targets.TargetDisposition
+Rampart.Targets.TargetDisposition.Unsupported = 2 -> Rampart.Targets.TargetDisposition
+Rampart.Virtualization.CompiledLeafVm
+Rampart.Virtualization.CompiledLeafVm.<Clone>$() -> Rampart.Virtualization.CompiledLeafVm!
+Rampart.Virtualization.CompiledLeafVm.BytecodeOffset.get -> int
+Rampart.Virtualization.CompiledLeafVm.BytecodeOffset.init -> void
+Rampart.Virtualization.CompiledLeafVm.Code.get -> byte[]!
+Rampart.Virtualization.CompiledLeafVm.Code.init -> void
+Rampart.Virtualization.CompiledLeafVm.CompiledLeafVm(byte[]! Code, int BytecodeOffset, int InstructionCount) -> void
+Rampart.Virtualization.CompiledLeafVm.Deconstruct(out byte[]! Code, out int BytecodeOffset, out int InstructionCount) -> void
+Rampart.Virtualization.CompiledLeafVm.Equals(Rampart.Virtualization.CompiledLeafVm? other) -> bool
+Rampart.Virtualization.CompiledLeafVm.InstructionCount.get -> int
+Rampart.Virtualization.CompiledLeafVm.InstructionCount.init -> void
+Rampart.Virtualization.CompiledLeafVm.MicrocodeOffset.get -> int?
+Rampart.Virtualization.CompiledLeafVm.MicrocodeOffset.init -> void
+Rampart.Virtualization.CompiledLeafVm.PolymorphicHandlerCount.get -> int
+Rampart.Virtualization.CompiledLeafVm.PolymorphicHandlerCount.init -> void
+Rampart.Virtualization.CompiledLeafVm.RuntimeFrameSize.get -> int
+Rampart.Virtualization.CompiledLeafVm.RuntimeFrameSize.init -> void
+Rampart.Virtualization.CompiledLeafVm.UnwindInfo.get -> byte[]?
+Rampart.Virtualization.CompiledLeafVm.UnwindInfo.init -> void
+Rampart.Virtualization.CompiledLeafVm.UsesExtendedIsa.get -> bool
+Rampart.Virtualization.CompiledLeafVm.UsesExtendedIsa.init -> void
+Rampart.Virtualization.LeafVirtualizer
+Rampart.Virtualization.LeafVmOptions
+Rampart.Virtualization.LeafVmOptions.<Clone>$() -> Rampart.Virtualization.LeafVmOptions!
+Rampart.Virtualization.LeafVmOptions.Equals(Rampart.Virtualization.LeafVmOptions? other) -> bool
+Rampart.Virtualization.LeafVmOptions.ExtendedIsa.get -> bool
+Rampart.Virtualization.LeafVmOptions.ExtendedIsa.init -> void
+Rampart.Virtualization.LeafVmOptions.HandlerPolymorphism.get -> bool
+Rampart.Virtualization.LeafVmOptions.HandlerPolymorphism.init -> void
+Rampart.Virtualization.LeafVmOptions.LeafVmOptions() -> void
+Rampart.Virtualization.LeafVmOptions.Nested.get -> bool
+Rampart.Virtualization.LeafVmOptions.Nested.init -> void
+Rampart.Virtualization.LeafVmOptions.RuntimeRekey.get -> bool
+Rampart.Virtualization.LeafVmOptions.RuntimeRekey.init -> void
+Rampart.X64.Asm
+Rampart.X64.Asm.AddRi(Rampart.X64.Reg reg, int imm) -> Rampart.X64.Asm!
+Rampart.X64.Asm.AddRr(Rampart.X64.Reg dst, Rampart.X64.Reg src) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Align(int alignment) -> Rampart.X64.Asm!
+Rampart.X64.Asm.AlignData(int alignment) -> Rampart.X64.Asm!
+Rampart.X64.Asm.AndRi(Rampart.X64.Reg reg, int imm) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Asm() -> void
+Rampart.X64.Asm.Assemble() -> byte[]!
+Rampart.X64.Asm.Call(string! label) -> Rampart.X64.Asm!
+Rampart.X64.Asm.CallMem(Rampart.X64.Reg baseReg, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.CallReg(Rampart.X64.Reg r) -> Rampart.X64.Asm!
+Rampart.X64.Asm.CallRip(string! label, int extra = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.CallRva(uint blobRva, uint targetRva) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Cdq() -> Rampart.X64.Asm!
+Rampart.X64.Asm.Cmp32Rr(Rampart.X64.Reg a, Rampart.X64.Reg b) -> Rampart.X64.Asm!
+Rampart.X64.Asm.CmpRr(Rampart.X64.Reg a, Rampart.X64.Reg b) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Cpuid() -> Rampart.X64.Asm!
+Rampart.X64.Asm.Db(params byte[]! bytes) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Db(System.ReadOnlySpan<byte> bytes) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Dd(params uint[]! values) -> Rampart.X64.Asm!
+Rampart.X64.Asm.DecR(Rampart.X64.Reg r) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Dq(params ulong[]! values) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Dq(ulong value) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Dw(params ushort[]! values) -> Rampart.X64.Asm!
+Rampart.X64.Asm.HasLabel(string! name) -> bool
+Rampart.X64.Asm.ImulRr(Rampart.X64.Reg dst, Rampart.X64.Reg src) -> Rampart.X64.Asm!
+Rampart.X64.Asm.IncR(Rampart.X64.Reg r) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Int3() -> Rampart.X64.Asm!
+Rampart.X64.Asm.Jcc(Rampart.X64.Cc cc, string! label) -> Rampart.X64.Asm!
+Rampart.X64.Asm.JccShortOver(Rampart.X64.Cc cc, int bytes) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Jmp(string! label) -> Rampart.X64.Asm!
+Rampart.X64.Asm.JmpRip(string! label, int extra = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.JmpRva(uint blobRva, uint targetRva) -> Rampart.X64.Asm!
+Rampart.X64.Asm.JmpShortSelf() -> Rampart.X64.Asm!
+Rampart.X64.Asm.Label(string! name) -> Rampart.X64.Asm!
+Rampart.X64.Asm.LabelOffset(string! name) -> int
+Rampart.X64.Asm.LeaRd(Rampart.X64.Reg dst, Rampart.X64.Reg srcBase, int disp) -> Rampart.X64.Asm!
+Rampart.X64.Asm.LeaRip(Rampart.X64.Reg dst, string! label, int extra = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.LoadRuntimeBase(Rampart.X64.Reg reg, uint ourRva) -> Rampart.X64.Asm!
+Rampart.X64.Asm.LockBtsMi(Rampart.X64.Reg dstBase, int disp, byte bit) -> Rampart.X64.Asm!
+Rampart.X64.Asm.LockXorMr(Rampart.X64.Reg dstBase, Rampart.X64.Reg src, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.LongNop(int bytes) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Mov32Ri(Rampart.X64.Reg dst, uint imm) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Mov32Rr(Rampart.X64.Reg dst, Rampart.X64.Reg src) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovMr(Rampart.X64.Reg dstBase, Rampart.X64.Reg src, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovMr32(Rampart.X64.Reg dstBase, Rampart.X64.Reg src, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovMr8(Rampart.X64.Reg dstBase, Rampart.X64.Reg src, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRegPeb(Rampart.X64.Reg reg) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRi(Rampart.X64.Reg dst, long imm) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRip(Rampart.X64.Reg dst, string! label, int extra = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRipStore(Rampart.X64.Reg src, string! label, int extra = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRiXorSplit(Rampart.X64.Reg dst, long value, Rampart.X64.Reg scratch, long mask) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRm(Rampart.X64.Reg dst, Rampart.X64.Reg srcBase, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRm32(Rampart.X64.Reg dst, Rampart.X64.Reg srcBase, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRm8(Rampart.X64.Reg dst, Rampart.X64.Reg srcBase, int disp = 0) -> Rampart.X64.Asm!
+Rampart.X64.Asm.MovRr(Rampart.X64.Reg dst, Rampart.X64.Reg src) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Nop(int count = 1) -> Rampart.X64.Asm!
+Rampart.X64.Asm.PopR(Rampart.X64.Reg r) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Position.get -> int
+Rampart.X64.Asm.PushI32(int value) -> Rampart.X64.Asm!
+Rampart.X64.Asm.PushR(Rampart.X64.Reg r) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Rdtsc() -> Rampart.X64.Asm!
+Rampart.X64.Asm.Ret() -> Rampart.X64.Asm!
+Rampart.X64.Asm.RipFixups.get -> System.Collections.Generic.IReadOnlyList<(int Pos, string! Target, int Extra)>!
+Rampart.X64.Asm.RolRi(Rampart.X64.Reg r, int count) -> Rampart.X64.Asm!
+Rampart.X64.Asm.ShlRi(Rampart.X64.Reg r, int count) -> Rampart.X64.Asm!
+Rampart.X64.Asm.ShrRi(Rampart.X64.Reg r, int count) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Sub32Rr(Rampart.X64.Reg dst, Rampart.X64.Reg src) -> Rampart.X64.Asm!
+Rampart.X64.Asm.SubRi(Rampart.X64.Reg reg, int imm) -> Rampart.X64.Asm!
+Rampart.X64.Asm.SubRr(Rampart.X64.Reg dst, Rampart.X64.Reg src) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Test32Rr(Rampart.X64.Reg a, Rampart.X64.Reg b) -> Rampart.X64.Asm!
+Rampart.X64.Asm.TestRi8(Rampart.X64.Reg r, byte mask) -> Rampart.X64.Asm!
+Rampart.X64.Asm.TestRr(Rampart.X64.Reg a, Rampart.X64.Reg b) -> Rampart.X64.Asm!
+Rampart.X64.Asm.Ud2() -> Rampart.X64.Asm!
+Rampart.X64.Asm.XchgRr(Rampart.X64.Reg a, Rampart.X64.Reg b) -> Rampart.X64.Asm!
+Rampart.X64.Asm.XorEdx() -> Rampart.X64.Asm!
+Rampart.X64.Asm.XorRr(Rampart.X64.Reg a, Rampart.X64.Reg b) -> Rampart.X64.Asm!
+Rampart.X64.Cc
+Rampart.X64.Cc.A = 7 -> Rampart.X64.Cc
+Rampart.X64.Cc.Ae = 3 -> Rampart.X64.Cc
+Rampart.X64.Cc.B = 2 -> Rampart.X64.Cc
+Rampart.X64.Cc.Be = 6 -> Rampart.X64.Cc
+Rampart.X64.Cc.E = 4 -> Rampart.X64.Cc
+Rampart.X64.Cc.G = 15 -> Rampart.X64.Cc
+Rampart.X64.Cc.Ge = 13 -> Rampart.X64.Cc
+Rampart.X64.Cc.L = 12 -> Rampart.X64.Cc
+Rampart.X64.Cc.Le = 14 -> Rampart.X64.Cc
+Rampart.X64.Cc.Ne = 5 -> Rampart.X64.Cc
+Rampart.X64.Cc.No = 1 -> Rampart.X64.Cc
+Rampart.X64.Cc.Np = 11 -> Rampart.X64.Cc
+Rampart.X64.Cc.Ns = 9 -> Rampart.X64.Cc
+Rampart.X64.Cc.O = 0 -> Rampart.X64.Cc
+Rampart.X64.Cc.P = 10 -> Rampart.X64.Cc
+Rampart.X64.Cc.S = 8 -> Rampart.X64.Cc
+Rampart.X64.Reg
+Rampart.X64.Reg.R10 = 10 -> Rampart.X64.Reg
+Rampart.X64.Reg.R11 = 11 -> Rampart.X64.Reg
+Rampart.X64.Reg.R12 = 12 -> Rampart.X64.Reg
+Rampart.X64.Reg.R13 = 13 -> Rampart.X64.Reg
+Rampart.X64.Reg.R14 = 14 -> Rampart.X64.Reg
+Rampart.X64.Reg.R15 = 15 -> Rampart.X64.Reg
+Rampart.X64.Reg.R8 = 8 -> Rampart.X64.Reg
+Rampart.X64.Reg.R9 = 9 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rax = 0 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rbp = 5 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rbx = 3 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rcx = 1 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rdi = 7 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rdx = 2 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rsi = 6 -> Rampart.X64.Reg
+Rampart.X64.Reg.Rsp = 4 -> Rampart.X64.Reg
+Rampart.X64.X64Decoder
+Rampart.X64.X64Instruction
+Rampart.X64.X64Instruction.Equals(Rampart.X64.X64Instruction other) -> bool
+Rampart.X64.X64Instruction.HasRipRelative.get -> bool
+Rampart.X64.X64Instruction.HasRipRelative.init -> void
+Rampart.X64.X64Instruction.Immediate.get -> long
+Rampart.X64.X64Instruction.Immediate.init -> void
+Rampart.X64.X64Instruction.Length.get -> int
+Rampart.X64.X64Instruction.Length.init -> void
+Rampart.X64.X64Instruction.Mnemonic.get -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Instruction.Mnemonic.init -> void
+Rampart.X64.X64Instruction.Relative.get -> int
+Rampart.X64.X64Instruction.Relative.init -> void
+Rampart.X64.X64Instruction.RipTargetRva.get -> uint
+Rampart.X64.X64Instruction.RipTargetRva.init -> void
+Rampart.X64.X64Instruction.X64Instruction() -> void
+Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.CallIndirect = 4 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.CallRel = 3 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.Int3 = 11 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.JccRel = 2 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.JmpIndirect = 5 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.JmpRel = 1 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.LeaRip = 13 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.MovRegImm = 8 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.MovRip = 14 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.Nop = 10 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.Other = 0 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.PushImm = 9 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.Ret = 6 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.RetImm = 7 -> Rampart.X64.X64Mnemonic
+Rampart.X64.X64Mnemonic.Ud2 = 12 -> Rampart.X64.X64Mnemonic
+static Rampart.Codecs.Aes128Ctr.Crypt(System.ReadOnlySpan<byte> key, ulong nonce, System.ReadOnlySpan<byte> input, ulong initialCounter = 1) -> byte[]!
+static Rampart.Codecs.Aes128Ctr.EncryptBlock(System.ReadOnlySpan<byte> key, System.Span<byte> block) -> void
+static Rampart.Codecs.Lzss.Compress(System.ReadOnlySpan<byte> input) -> byte[]!
+static Rampart.Codecs.Lzss.Decompress(System.ReadOnlySpan<byte> input) -> byte[]!
+static Rampart.Config.Concern.operator !=(Rampart.Config.Concern? left, Rampart.Config.Concern? right) -> bool
+static Rampart.Config.Concern.operator ==(Rampart.Config.Concern? left, Rampart.Config.Concern? right) -> bool
+static Rampart.Config.ConcernRules.Evaluate(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog) -> System.Collections.Generic.List<Rampart.Config.Concern!>!
+static Rampart.Config.KnobCatalog.BudgetFor(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog) -> int
+static Rampart.Config.KnobCatalog.Load() -> Rampart.Config.KnobCatalog!
+static Rampart.Config.KnobDef.operator !=(Rampart.Config.KnobDef? left, Rampart.Config.KnobDef? right) -> bool
+static Rampart.Config.KnobDef.operator ==(Rampart.Config.KnobDef? left, Rampart.Config.KnobDef? right) -> bool
+static Rampart.Config.KnobGroups.Title(string! group) -> string!
+static Rampart.Config.Presets.DefaultLevel(string! preset, Rampart.Config.KnobDef! knob) -> Rampart.Config.ProtectionLevel
+static Rampart.Config.ProtectionCapabilities.ClampToReady(string! knobId, Rampart.Config.ProtectionLevel requested) -> Rampart.Config.ProtectionLevel
+static Rampart.Config.ProtectionCapabilities.IsReady(string! knobId) -> bool
+static Rampart.Config.ProtectionCapabilities.MaxReadyLevel(string! knobId) -> Rampart.Config.ProtectionLevel
+static Rampart.Config.ProtectionCapabilities.Validate(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog) -> void
+static Rampart.Config.ProtectionCapabilities.ValidateEffectiveFunctionPolicies(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, System.Collections.Generic.IEnumerable<Rampart.Engine.FunctionDescriptor!>! functions) -> void
+static Rampart.Config.ProtectionLevelExtensions.DisplayName(this Rampart.Config.ProtectionLevel level) -> string!
+static Rampart.Config.ProtectionSelection.ApplyGroupLevel(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, string! group, Rampart.Config.ProtectionLevel level) -> void
+static Rampart.Config.ProtectionSelection.ApplyOnly(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, System.Collections.Generic.IEnumerable<string!>! knobIds) -> void
+static Rampart.Config.ProtectionSelection.Disable(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, System.Collections.Generic.IEnumerable<string!>! knobIds) -> void
+static Rampart.Config.ProtectionSettings.FromPreset(string! preset) -> Rampart.Config.ProtectionSettings!
+static Rampart.Config.ProtectionSettingsJson.Deserialize(string! json) -> Rampart.Config.ProtectionSettings!
+static Rampart.Config.ProtectionSettingsJson.Serialize(Rampart.Config.ProtectionSettings! settings) -> string!
+static Rampart.Config.TargetCapabilities.ApplyGroup(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, string! group, Rampart.Config.ProtectionLevel level, Rampart.Targets.ProtectionTargetKind target) -> void
+static Rampart.Config.TargetCapabilities.ApplyOnly(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, System.Collections.Generic.IEnumerable<string!>! ids, Rampart.Targets.ProtectionTargetKind target) -> void
+static Rampart.Config.TargetCapabilities.MaximumLevel(string! id, Rampart.Targets.ProtectionTargetKind target) -> Rampart.Config.ProtectionLevel
+static Rampart.Config.TargetCapabilities.ValidateSettings(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog, Rampart.Targets.ProtectionTargetKind target) -> void
+static Rampart.Config.ThreatDials.Apply(Rampart.Config.ProtectionSettings! settings, Rampart.Config.KnobCatalog! catalog) -> void
+static Rampart.ControlFlow.CompiledExceptionLeaf.operator !=(Rampart.ControlFlow.CompiledExceptionLeaf? left, Rampart.ControlFlow.CompiledExceptionLeaf? right) -> bool
+static Rampart.ControlFlow.CompiledExceptionLeaf.operator ==(Rampart.ControlFlow.CompiledExceptionLeaf? left, Rampart.ControlFlow.CompiledExceptionLeaf? right) -> bool
+static Rampart.ControlFlow.ImageExceptionTransition.operator !=(Rampart.ControlFlow.ImageExceptionTransition? left, Rampart.ControlFlow.ImageExceptionTransition? right) -> bool
+static Rampart.ControlFlow.ImageExceptionTransition.operator ==(Rampart.ControlFlow.ImageExceptionTransition? left, Rampart.ControlFlow.ImageExceptionTransition? right) -> bool
+static Rampart.ControlFlow.LeafControlFlowCompiler.TryCompile(System.ReadOnlySpan<byte> source, System.Random! rng, out byte[]! code, out string! reason) -> bool
+static Rampart.ControlFlow.LeafControlFlowCompiler.TryCompileExceptions(System.ReadOnlySpan<byte> source, bool nanomites, bool exceptionFlow, out Rampart.ControlFlow.CompiledExceptionLeaf? compiled, out string! reason) -> bool
+static Rampart.ControlFlow.LeafExceptionDispatcher.Compile(uint selfRva, System.Collections.Generic.IReadOnlyList<Rampart.ControlFlow.ImageExceptionTransition!>! sites) -> byte[]!
+static Rampart.ControlFlow.LeafExceptionTransition.operator !=(Rampart.ControlFlow.LeafExceptionTransition? left, Rampart.ControlFlow.LeafExceptionTransition? right) -> bool
+static Rampart.ControlFlow.LeafExceptionTransition.operator ==(Rampart.ControlFlow.LeafExceptionTransition? left, Rampart.ControlFlow.LeafExceptionTransition? right) -> bool
+static Rampart.ControlFlow.LeafFunctionEligibility.TryValidate(Rampart.Engine.BuildContext! ctx, Rampart.Engine.FunctionDescriptor! function, out string! reason) -> bool
+static Rampart.Engine.BuildContext.PatchRipReferences(byte[]! code, Rampart.X64.Asm! assembler, uint codeRva, System.Collections.Generic.IReadOnlyDictionary<string!, uint>! targets) -> void
+static Rampart.Engine.BuildLogEntry.operator !=(Rampart.Engine.BuildLogEntry? left, Rampart.Engine.BuildLogEntry? right) -> bool
+static Rampart.Engine.BuildLogEntry.operator ==(Rampart.Engine.BuildLogEntry? left, Rampart.Engine.BuildLogEntry? right) -> bool
+static Rampart.Engine.FunctionDescriptor.Attach(Rampart.Pe.PeImage! pe, System.Collections.Generic.IEnumerable<Rampart.Pe.RuntimeFunction>! functions, System.Collections.Generic.IEnumerable<Rampart.Symbols.SymbolRecord!>! symbols) -> System.Collections.Generic.List<Rampart.Engine.FunctionDescriptor!>!
+static Rampart.Engine.FunctionDescriptor.operator !=(Rampart.Engine.FunctionDescriptor? left, Rampart.Engine.FunctionDescriptor? right) -> bool
+static Rampart.Engine.FunctionDescriptor.operator ==(Rampart.Engine.FunctionDescriptor? left, Rampart.Engine.FunctionDescriptor? right) -> bool
+static Rampart.Engine.FunctionPolicy.Matches(Rampart.Config.ProtectionRule! rule, Rampart.Engine.FunctionDescriptor! function) -> bool
+static Rampart.Engine.FunctionTransformation.operator !=(Rampart.Engine.FunctionTransformation? left, Rampart.Engine.FunctionTransformation? right) -> bool
+static Rampart.Engine.FunctionTransformation.operator ==(Rampart.Engine.FunctionTransformation? left, Rampart.Engine.FunctionTransformation? right) -> bool
+static Rampart.Engine.GuardCfBuilder.RegisterTarget(Rampart.Engine.BuildContext! ctx, uint targetRva) -> void
+static Rampart.Engine.PeCompatibility.Inspect(Rampart.Pe.PeImage! pe) -> Rampart.Engine.PeCompatibilityFeatures!
+static Rampart.Engine.PeCompatibility.Validate(Rampart.Pe.PeImage! pe) -> void
+static Rampart.Engine.PeCompatibility.ValidateX86(Rampart.Pe.PeImage! pe) -> void
+static Rampart.Engine.PeCompatibilityFeatures.operator !=(Rampart.Engine.PeCompatibilityFeatures? left, Rampart.Engine.PeCompatibilityFeatures? right) -> bool
+static Rampart.Engine.PeCompatibilityFeatures.operator ==(Rampart.Engine.PeCompatibilityFeatures? left, Rampart.Engine.PeCompatibilityFeatures? right) -> bool
+static Rampart.Engine.RelocBuilder.Rebuild(Rampart.Engine.BuildContext! ctx) -> void
+static Rampart.Engine.RuntimeDetectionState.EmitRecord(Rampart.X64.Asm! asm, Rampart.X64.Reg statePointer, Rampart.Engine.RuntimeDetectionKind kind, bool taintSession, ulong taintConstant, string! labelPrefix) -> void
+static Rampart.Engine.RuntimeDetectionState.Enable(Rampart.Engine.BuildContext! ctx, Rampart.Engine.RuntimeDetectionKind checks) -> void
+static Rampart.Engine.RuntimeDetectionState.Ensure(Rampart.Engine.BuildContext! ctx) -> Rampart.Engine.RuntimeDetectionStateLayout!
+static Rampart.Engine.RuntimeDetectionStateLayout.operator !=(Rampart.Engine.RuntimeDetectionStateLayout? left, Rampart.Engine.RuntimeDetectionStateLayout? right) -> bool
+static Rampart.Engine.RuntimeDetectionStateLayout.operator ==(Rampart.Engine.RuntimeDetectionStateLayout? left, Rampart.Engine.RuntimeDetectionStateLayout? right) -> bool
+static Rampart.Engine.TlsBuilder.Install(Rampart.Engine.BuildContext! ctx, uint dispatcherRva) -> void
+static Rampart.Imports.ExportHashResolver.Emit(ulong seed) -> byte[]!
+static Rampart.Imports.ExportHashResolver.Hash(string! name, ulong seed) -> ulong
+static Rampart.Managed.ManagedBackend.ReadWatermark(byte[]! input) -> string?
+static Rampart.Managed.ManagedBackend.ValidateInput(byte[]! input, Rampart.Config.ManagedProtectionOptions! options) -> void
+static Rampart.Managed.ManagedCoverage.Create(System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedMethodEvidence!>! methods, System.Collections.Generic.IReadOnlyList<Rampart.Managed.ManagedRenameEvidence!>! identifiers) -> Rampart.Managed.ManagedCoverage!
+static Rampart.Managed.ManagedCoverage.operator !=(Rampart.Managed.ManagedCoverage? left, Rampart.Managed.ManagedCoverage? right) -> bool
+static Rampart.Managed.ManagedCoverage.operator ==(Rampart.Managed.ManagedCoverage? left, Rampart.Managed.ManagedCoverage? right) -> bool
+static Rampart.Managed.ManagedCoverageReason.operator !=(Rampart.Managed.ManagedCoverageReason? left, Rampart.Managed.ManagedCoverageReason? right) -> bool
+static Rampart.Managed.ManagedCoverageReason.operator ==(Rampart.Managed.ManagedCoverageReason? left, Rampart.Managed.ManagedCoverageReason? right) -> bool
+static Rampart.Managed.ManagedFrameworkBinding.operator !=(Rampart.Managed.ManagedFrameworkBinding? left, Rampart.Managed.ManagedFrameworkBinding? right) -> bool
+static Rampart.Managed.ManagedFrameworkBinding.operator ==(Rampart.Managed.ManagedFrameworkBinding? left, Rampart.Managed.ManagedFrameworkBinding? right) -> bool
+static Rampart.Managed.ManagedMethodEvidence.operator !=(Rampart.Managed.ManagedMethodEvidence? left, Rampart.Managed.ManagedMethodEvidence? right) -> bool
+static Rampart.Managed.ManagedMethodEvidence.operator ==(Rampart.Managed.ManagedMethodEvidence? left, Rampart.Managed.ManagedMethodEvidence? right) -> bool
+static Rampart.Managed.ManagedMethodIdentity.operator !=(Rampart.Managed.ManagedMethodIdentity? left, Rampart.Managed.ManagedMethodIdentity? right) -> bool
+static Rampart.Managed.ManagedMethodIdentity.operator ==(Rampart.Managed.ManagedMethodIdentity? left, Rampart.Managed.ManagedMethodIdentity? right) -> bool
+static Rampart.Managed.ManagedProtectionCoverage.operator !=(Rampart.Managed.ManagedProtectionCoverage? left, Rampart.Managed.ManagedProtectionCoverage? right) -> bool
+static Rampart.Managed.ManagedProtectionCoverage.operator ==(Rampart.Managed.ManagedProtectionCoverage? left, Rampart.Managed.ManagedProtectionCoverage? right) -> bool
+static Rampart.Managed.ManagedProtectionResult.operator !=(Rampart.Managed.ManagedProtectionResult? left, Rampart.Managed.ManagedProtectionResult? right) -> bool
+static Rampart.Managed.ManagedProtectionResult.operator ==(Rampart.Managed.ManagedProtectionResult? left, Rampart.Managed.ManagedProtectionResult? right) -> bool
+static Rampart.Managed.ManagedRenameEvidence.operator !=(Rampart.Managed.ManagedRenameEvidence? left, Rampart.Managed.ManagedRenameEvidence? right) -> bool
+static Rampart.Managed.ManagedRenameEvidence.operator ==(Rampart.Managed.ManagedRenameEvidence? left, Rampart.Managed.ManagedRenameEvidence? right) -> bool
+static Rampart.Managed.ManagedSequencePointMapping.operator !=(Rampart.Managed.ManagedSequencePointMapping? left, Rampart.Managed.ManagedSequencePointMapping? right) -> bool
+static Rampart.Managed.ManagedSequencePointMapping.operator ==(Rampart.Managed.ManagedSequencePointMapping? left, Rampart.Managed.ManagedSequencePointMapping? right) -> bool
+static Rampart.Managed.ManagedSiteCoverageReason.operator !=(Rampart.Managed.ManagedSiteCoverageReason? left, Rampart.Managed.ManagedSiteCoverageReason? right) -> bool
+static Rampart.Managed.ManagedSiteCoverageReason.operator ==(Rampart.Managed.ManagedSiteCoverageReason? left, Rampart.Managed.ManagedSiteCoverageReason? right) -> bool
+static Rampart.Managed.ManagedSiteEvidence.operator !=(Rampart.Managed.ManagedSiteEvidence? left, Rampart.Managed.ManagedSiteEvidence? right) -> bool
+static Rampart.Managed.ManagedSiteEvidence.operator ==(Rampart.Managed.ManagedSiteEvidence? left, Rampart.Managed.ManagedSiteEvidence? right) -> bool
+static Rampart.Managed.ManagedTokenMapping.operator !=(Rampart.Managed.ManagedTokenMapping? left, Rampart.Managed.ManagedTokenMapping? right) -> bool
+static Rampart.Managed.ManagedTokenMapping.operator ==(Rampart.Managed.ManagedTokenMapping? left, Rampart.Managed.ManagedTokenMapping? right) -> bool
+static Rampart.Managed.ManagedVerification.Verify(byte[]! image, Rampart.Config.ManagedVerificationOptions! options) -> Rampart.Managed.ManagedVerificationReport!
+static Rampart.Managed.ManagedVerification.VerifyResult(Rampart.Managed.ManagedProtectionResult! result, Rampart.Config.ManagedProtectionOptions! options) -> Rampart.Managed.ManagedProtectionResult!
+static Rampart.Managed.ManagedVerificationReference.operator !=(Rampart.Managed.ManagedVerificationReference? left, Rampart.Managed.ManagedVerificationReference? right) -> bool
+static Rampart.Managed.ManagedVerificationReference.operator ==(Rampart.Managed.ManagedVerificationReference? left, Rampart.Managed.ManagedVerificationReference? right) -> bool
+static Rampart.Managed.ManagedVerificationReport.operator !=(Rampart.Managed.ManagedVerificationReport? left, Rampart.Managed.ManagedVerificationReport? right) -> bool
+static Rampart.Managed.ManagedVerificationReport.operator ==(Rampart.Managed.ManagedVerificationReport? left, Rampart.Managed.ManagedVerificationReport? right) -> bool
+static Rampart.NativeAot.NativeAotInvariantEvidence.operator !=(Rampart.NativeAot.NativeAotInvariantEvidence? left, Rampart.NativeAot.NativeAotInvariantEvidence? right) -> bool
+static Rampart.NativeAot.NativeAotInvariantEvidence.operator ==(Rampart.NativeAot.NativeAotInvariantEvidence? left, Rampart.NativeAot.NativeAotInvariantEvidence? right) -> bool
+static Rampart.NativeAot.NativeAotInvariantSnapshot.Capture(byte[]! image) -> Rampart.NativeAot.NativeAotInvariantSnapshot!
+static Rampart.NativeAot.NativeAotMarker.TryInspect(byte[]! image, out bool valid) -> bool
+static Rampart.NativeAot.NativeAotOwnedRange.operator !=(Rampart.NativeAot.NativeAotOwnedRange? left, Rampart.NativeAot.NativeAotOwnedRange? right) -> bool
+static Rampart.NativeAot.NativeAotOwnedRange.operator ==(Rampart.NativeAot.NativeAotOwnedRange? left, Rampart.NativeAot.NativeAotOwnedRange? right) -> bool
+static Rampart.NativeAot.NativeAotPassEvidence.operator !=(Rampart.NativeAot.NativeAotPassEvidence? left, Rampart.NativeAot.NativeAotPassEvidence? right) -> bool
+static Rampart.NativeAot.NativeAotPassEvidence.operator ==(Rampart.NativeAot.NativeAotPassEvidence? left, Rampart.NativeAot.NativeAotPassEvidence? right) -> bool
+static Rampart.NativeAot.NativeAotPassPolicy.Disposition(string! knob) -> Rampart.NativeAot.NativeAotPassDisposition
+static Rampart.NativeAot.NativeAotPassPolicy.Plan(Rampart.Config.ProtectionSettings! settings, bool strict = false) -> System.Collections.Generic.IReadOnlyList<Rampart.NativeAot.NativeAotPassEvidence!>!
+static Rampart.NativeAot.NativeAotReport.operator !=(Rampart.NativeAot.NativeAotReport? left, Rampart.NativeAot.NativeAotReport? right) -> bool
+static Rampart.NativeAot.NativeAotReport.operator ==(Rampart.NativeAot.NativeAotReport? left, Rampart.NativeAot.NativeAotReport? right) -> bool
+static Rampart.NativeAot.NativeAotResult.operator !=(Rampart.NativeAot.NativeAotResult? left, Rampart.NativeAot.NativeAotResult? right) -> bool
+static Rampart.NativeAot.NativeAotResult.operator ==(Rampart.NativeAot.NativeAotResult? left, Rampart.NativeAot.NativeAotResult? right) -> bool
+static Rampart.NativeTransforms.CompiledNativeLeaf.operator !=(Rampart.NativeTransforms.CompiledNativeLeaf? left, Rampart.NativeTransforms.CompiledNativeLeaf? right) -> bool
+static Rampart.NativeTransforms.CompiledNativeLeaf.operator ==(Rampart.NativeTransforms.CompiledNativeLeaf? left, Rampart.NativeTransforms.CompiledNativeLeaf? right) -> bool
+static Rampart.NativeTransforms.NativeLeafCompiler.TryCompile(System.ReadOnlySpan<byte> source, System.Random! random, Rampart.NativeTransforms.NativeTransformOptions! options, out Rampart.NativeTransforms.CompiledNativeLeaf? compiled, out string! reason) -> bool
+static Rampart.NativeTransforms.NativeTransformOptions.operator !=(Rampart.NativeTransforms.NativeTransformOptions? left, Rampart.NativeTransforms.NativeTransformOptions? right) -> bool
+static Rampart.NativeTransforms.NativeTransformOptions.operator ==(Rampart.NativeTransforms.NativeTransformOptions? left, Rampart.NativeTransforms.NativeTransformOptions? right) -> bool
+static Rampart.Packing.LzssDecoderEmitter.Emit(uint selfRva, uint inputRva, int inputLength, uint outputRva, int outputLength) -> byte[]!
+static Rampart.Pe.DataDirectory.operator !=(Rampart.Pe.DataDirectory? left, Rampart.Pe.DataDirectory? right) -> bool
+static Rampart.Pe.DataDirectory.operator ==(Rampart.Pe.DataDirectory? left, Rampart.Pe.DataDirectory? right) -> bool
+static Rampart.Pe.ExceptionTable.Parse(Rampart.Pe.PeImage! pe) -> System.Collections.Generic.List<Rampart.Pe.RuntimeFunction>!
+static Rampart.Pe.ExceptionTableBuilder.Register(Rampart.Engine.BuildContext! ctx, uint begin, uint end, System.ReadOnlySpan<byte> unwind) -> void
+static Rampart.Pe.ExtendedDllCharacteristicsEditor.Add(Rampart.Engine.BuildContext! ctx, uint characteristics) -> void
+static Rampart.Pe.ExtendedDllCharacteristicsEditor.Add(Rampart.Engine.BuildContext! ctx, ushort characteristics) -> void
+static Rampart.Pe.ImportDirectoryEditor.EnsureNamedImports(Rampart.Engine.BuildContext! ctx, string! dll, params string![]! names) -> System.Collections.Generic.IReadOnlyDictionary<string!, uint>!
+static Rampart.Pe.ImportedFunction.operator !=(Rampart.Pe.ImportedFunction? left, Rampart.Pe.ImportedFunction? right) -> bool
+static Rampart.Pe.ImportedFunction.operator ==(Rampart.Pe.ImportedFunction? left, Rampart.Pe.ImportedFunction? right) -> bool
+static Rampart.Pe.ImportTable.NormalizeDll(string! dll) -> string!
+static Rampart.Pe.ImportTable.Parse(Rampart.Pe.PeImage! pe) -> System.Collections.Generic.List<Rampart.Pe.ImportedFunction!>!
+static Rampart.Pe.PeChecksum.Compute(System.ReadOnlySpan<byte> file) -> uint
+static Rampart.Pe.PeImage.AlignUp(uint value, uint alignment) -> uint
+static Rampart.Pe.PeImage.Load(byte[]! file) -> Rampart.Pe.PeImage!
+static Rampart.Pe.PeImage.LoadFile(string! path) -> Rampart.Pe.PeImage!
+static Rampart.Pe.Relocations.Enumerate(Rampart.Pe.PeImage! pe) -> System.Collections.Generic.IEnumerable<Rampart.Pe.RelocEntry>!
+static Rampart.Pe.Relocations.IsDynamicBase(Rampart.Pe.PeImage! pe) -> bool
+static Rampart.Pe.RelocEntry.operator !=(Rampart.Pe.RelocEntry left, Rampart.Pe.RelocEntry right) -> bool
+static Rampart.Pe.RelocEntry.operator ==(Rampart.Pe.RelocEntry left, Rampart.Pe.RelocEntry right) -> bool
+static Rampart.Pe.RuntimeFunction.operator !=(Rampart.Pe.RuntimeFunction left, Rampart.Pe.RuntimeFunction right) -> bool
+static Rampart.Pe.RuntimeFunction.operator ==(Rampart.Pe.RuntimeFunction left, Rampart.Pe.RuntimeFunction right) -> bool
+static Rampart.Symbols.SymbolLoader.Load(System.Collections.Generic.IEnumerable<string!>! sources, Rampart.Pe.PeImage! image, string? pdbTool = null) -> System.Collections.Generic.List<Rampart.Symbols.SymbolRecord!>!
+static Rampart.Symbols.SymbolLoader.ParseJson(string! json) -> System.Collections.Generic.List<Rampart.Symbols.SymbolRecord!>!
+static Rampart.Symbols.SymbolLoader.ParseLlvmPdbDump(string! text, Rampart.Pe.PeImage! image, string! sourceName) -> System.Collections.Generic.List<Rampart.Symbols.SymbolRecord!>!
+static Rampart.Symbols.SymbolLoader.ParseMap(string! text, Rampart.Pe.PeImage! image, string! sourceName = "symbols.map") -> System.Collections.Generic.List<Rampart.Symbols.SymbolRecord!>!
+static Rampart.Targets.ArtifactGraph.Inspect(string! inputPath, Rampart.Targets.TargetClassification? classification = null, Rampart.Targets.ArtifactSigningInstructions? signingInstructions = null) -> Rampart.Targets.ArtifactGraph!
+static Rampart.Targets.ArtifactGraph.operator !=(Rampart.Targets.ArtifactGraph? left, Rampart.Targets.ArtifactGraph? right) -> bool
+static Rampart.Targets.ArtifactGraph.operator ==(Rampart.Targets.ArtifactGraph? left, Rampart.Targets.ArtifactGraph? right) -> bool
+static Rampart.Targets.ArtifactNode.operator !=(Rampart.Targets.ArtifactNode? left, Rampart.Targets.ArtifactNode? right) -> bool
+static Rampart.Targets.ArtifactNode.operator ==(Rampart.Targets.ArtifactNode? left, Rampart.Targets.ArtifactNode? right) -> bool
+static Rampart.Targets.ArtifactSigningInstructions.ForTarget(Rampart.Targets.ProtectionTarget! target, string? keyEnvironmentVariable = null) -> Rampart.Targets.ArtifactSigningInstructions!
+static Rampart.Targets.ArtifactSigningInstructions.operator !=(Rampart.Targets.ArtifactSigningInstructions? left, Rampart.Targets.ArtifactSigningInstructions? right) -> bool
+static Rampart.Targets.ArtifactSigningInstructions.operator ==(Rampart.Targets.ArtifactSigningInstructions? left, Rampart.Targets.ArtifactSigningInstructions? right) -> bool
+static Rampart.Targets.ArtifactWriter.Write(System.Collections.Generic.IReadOnlyList<Rampart.Targets.OutputArtifact!>! artifacts, bool overwrite, System.Collections.Generic.IEnumerable<string!>? protectedInputs = null) -> void
+static Rampart.Targets.ArtifactWriter.Write(System.Collections.Generic.IReadOnlyList<Rampart.Targets.OutputArtifact!>! artifacts, bool overwrite, System.Collections.Generic.IEnumerable<string!>? protectedInputs, System.Collections.Generic.IEnumerable<string!>? removalPaths) -> void
+static Rampart.Targets.ManagedProtectionBackend.Adapt(byte[]! input, Rampart.Config.ProtectionSettings! settings, Rampart.Targets.ProtectionPlan! plan, Rampart.Managed.ManagedProtectionResult! result) -> Rampart.Targets.BackendProtectionResult!
+static Rampart.Targets.ManagedProtectionBackend.ResolveOptions(Rampart.Config.ProtectionSettings! settings) -> Rampart.Config.ManagedProtectionOptions!
+static Rampart.Targets.OutputArtifact.operator !=(Rampart.Targets.OutputArtifact? left, Rampart.Targets.OutputArtifact? right) -> bool
+static Rampart.Targets.OutputArtifact.operator ==(Rampart.Targets.OutputArtifact? left, Rampart.Targets.OutputArtifact? right) -> bool
+static Rampart.Targets.PlannedProtection.operator !=(Rampart.Targets.PlannedProtection? left, Rampart.Targets.PlannedProtection? right) -> bool
+static Rampart.Targets.PlannedProtection.operator ==(Rampart.Targets.PlannedProtection? left, Rampart.Targets.PlannedProtection? right) -> bool
+static Rampart.Targets.ProtectionEvidence.operator !=(Rampart.Targets.ProtectionEvidence? left, Rampart.Targets.ProtectionEvidence? right) -> bool
+static Rampart.Targets.ProtectionEvidence.operator ==(Rampart.Targets.ProtectionEvidence? left, Rampart.Targets.ProtectionEvidence? right) -> bool
+static Rampart.Targets.ProtectionMeasurement.operator !=(Rampart.Targets.ProtectionMeasurement? left, Rampart.Targets.ProtectionMeasurement? right) -> bool
+static Rampart.Targets.ProtectionMeasurement.operator ==(Rampart.Targets.ProtectionMeasurement? left, Rampart.Targets.ProtectionMeasurement? right) -> bool
+static Rampart.Targets.ProtectionPipeline.BackendFor(Rampart.Targets.TargetClassification! classification, Rampart.Config.ProtectionSettings! settings) -> Rampart.Targets.IProtectionBackend!
+static Rampart.Targets.ProtectionPipeline.ReadInput(string! path) -> byte[]!
+static Rampart.Targets.ProtectionPlan.operator !=(Rampart.Targets.ProtectionPlan? left, Rampart.Targets.ProtectionPlan? right) -> bool
+static Rampart.Targets.ProtectionPlan.operator ==(Rampart.Targets.ProtectionPlan? left, Rampart.Targets.ProtectionPlan? right) -> bool
+static Rampart.Targets.ProtectionSubject.operator !=(Rampart.Targets.ProtectionSubject? left, Rampart.Targets.ProtectionSubject? right) -> bool
+static Rampart.Targets.ProtectionSubject.operator ==(Rampart.Targets.ProtectionSubject? left, Rampart.Targets.ProtectionSubject? right) -> bool
+static Rampart.Targets.ProtectionTarget.operator !=(Rampart.Targets.ProtectionTarget? left, Rampart.Targets.ProtectionTarget? right) -> bool
+static Rampart.Targets.ProtectionTarget.operator ==(Rampart.Targets.ProtectionTarget? left, Rampart.Targets.ProtectionTarget? right) -> bool
+static Rampart.Targets.TargetClassification.operator !=(Rampart.Targets.TargetClassification? left, Rampart.Targets.TargetClassification? right) -> bool
+static Rampart.Targets.TargetClassification.operator ==(Rampart.Targets.TargetClassification? left, Rampart.Targets.TargetClassification? right) -> bool
+static Rampart.Targets.TargetClassifier.Classify(byte[]! bytes, string? inputPath = null) -> Rampart.Targets.TargetClassification!
+static Rampart.Virtualization.CompiledLeafVm.operator !=(Rampart.Virtualization.CompiledLeafVm? left, Rampart.Virtualization.CompiledLeafVm? right) -> bool
+static Rampart.Virtualization.CompiledLeafVm.operator ==(Rampart.Virtualization.CompiledLeafVm? left, Rampart.Virtualization.CompiledLeafVm? right) -> bool
+static Rampart.Virtualization.LeafVirtualizer.TryCompile(System.ReadOnlySpan<byte> native, System.Random! random, out Rampart.Virtualization.CompiledLeafVm? compiled, out string! reason) -> bool
+static Rampart.Virtualization.LeafVirtualizer.TryCompile(System.ReadOnlySpan<byte> native, System.Random! random, Rampart.Virtualization.LeafVmOptions! options, out Rampart.Virtualization.CompiledLeafVm? compiled, out string! reason) -> bool
+static Rampart.Virtualization.LeafVmOptions.operator !=(Rampart.Virtualization.LeafVmOptions? left, Rampart.Virtualization.LeafVmOptions? right) -> bool
+static Rampart.Virtualization.LeafVmOptions.operator ==(Rampart.Virtualization.LeafVmOptions? left, Rampart.Virtualization.LeafVmOptions? right) -> bool
+static Rampart.X64.X64Decoder.TryDecode(System.ReadOnlySpan<byte> code, int offset, uint instructionRva, out Rampart.X64.X64Instruction instr) -> bool
+static Rampart.X64.X64Instruction.operator !=(Rampart.X64.X64Instruction left, Rampart.X64.X64Instruction right) -> bool
+static Rampart.X64.X64Instruction.operator ==(Rampart.X64.X64Instruction left, Rampart.X64.X64Instruction right) -> bool
+static readonly Rampart.Config.KnobCatalogData.Entries -> System.Collections.Generic.IEnumerable<Rampart.Config.KnobDef!>!
+static readonly Rampart.Config.KnobGroups.All -> string![]!
+static readonly Rampart.Config.Presets.All -> string![]!
+static readonly Rampart.Config.ProtectionCapabilities.FunctionScopedKnobs -> System.Collections.Generic.HashSet<string!>!
+static readonly Rampart.Config.ProtectionSettingsJson.Options -> System.Text.Json.JsonSerializerOptions!
+static readonly Rampart.Config.ThreatTags.All -> string![]!
+static readonly Rampart.Pe.DataDir.Names -> string![]!
+~override Rampart.Pe.RelocEntry.Equals(object obj) -> bool
+~override Rampart.Pe.RelocEntry.ToString() -> string
+~override Rampart.Pe.RuntimeFunction.Equals(object obj) -> bool
+~override Rampart.Pe.RuntimeFunction.ToString() -> string
+~override Rampart.X64.X64Instruction.Equals(object obj) -> bool
+~override Rampart.X64.X64Instruction.ToString() -> string
